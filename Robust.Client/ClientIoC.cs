@@ -1,4 +1,5 @@
 using System;
+using Robust.Client.Audio;
 using Robust.Client.Audio.Midi;
 using Robust.Client.Configuration;
 using Robust.Client.Console;
@@ -6,8 +7,8 @@ using Robust.Client.Debugging;
 using Robust.Client.GameObjects;
 using Robust.Client.GameStates;
 using Robust.Client.Graphics;
-using Robust.Client.Graphics.Audio;
 using Robust.Client.Graphics.Clyde;
+using Robust.Client.HWId;
 using Robust.Client.Input;
 using Robust.Client.Map;
 using Robust.Client.Placement;
@@ -16,13 +17,17 @@ using Robust.Client.Profiling;
 using Robust.Client.Prototypes;
 using Robust.Client.Reflection;
 using Robust.Client.Replays;
+using Robust.Client.Replays.Loading;
+using Robust.Client.Replays.Playback;
 using Robust.Client.ResourceManagement;
 using Robust.Client.Serialization;
 using Robust.Client.State;
 using Robust.Client.Timing;
+using Robust.Client.Upload;
 using Robust.Client.UserInterface;
 using Robust.Client.UserInterface.RichText;
 using Robust.Client.UserInterface.Themes;
+using Robust.Client.UserInterface.XAML.Proxy;
 using Robust.Client.Utility;
 using Robust.Client.ViewVariables;
 using Robust.Shared;
@@ -34,12 +39,13 @@ using Robust.Shared.IoC;
 using Robust.Shared.Map;
 using Robust.Shared.Network;
 using Robust.Shared.Physics;
-using Robust.Shared.Players;
+using Robust.Shared.Player;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Reflection;
 using Robust.Shared.Replays;
 using Robust.Shared.Serialization;
 using Robust.Shared.Timing;
+using Robust.Shared.Upload;
 using Robust.Shared.ViewVariables;
 
 namespace Robust.Client
@@ -64,6 +70,7 @@ namespace Robust.Client
             deps.Register<IComponentFactory, ComponentFactory>();
             deps.Register<ITileDefinitionManager, ClydeTileDefinitionManager>();
             deps.Register<IClydeTileDefinitionManager, ClydeTileDefinitionManager>();
+            deps.Register<ClydeTileDefinitionManager, ClydeTileDefinitionManager>();
             deps.Register<GameController, GameController>();
             deps.Register<IGameController, GameController>();
             deps.Register<IGameControllerInternal, GameController>();
@@ -77,7 +84,10 @@ namespace Robust.Client
             deps.Register<IClientEntityManager, ClientEntityManager>();
             deps.Register<IClientEntityManagerInternal, ClientEntityManager>();
             deps.Register<IEntityNetworkManager, ClientEntityManager>();
+            deps.Register<IReplayLoadManager, ReplayLoadManager>();
+            deps.Register<IReplayPlaybackManager, ReplayPlaybackManager>();
             deps.Register<IReplayRecordingManager, ReplayRecordingManager>();
+            deps.Register<IReplayRecordingManagerInternal, ReplayRecordingManager>();
             deps.Register<IClientGameStateManager, ClientGameStateManager>();
             deps.Register<IBaseClient, BaseClient>();
             deps.Register<IPlayerManager, PlayerManager>();
@@ -90,6 +100,8 @@ namespace Robust.Client
             deps.Register<IMidiManager, MidiManager>();
             deps.Register<IAuthManager, AuthManager>();
             deps.Register<ProfViewManager>();
+            deps.Register<IGamePrototypeLoadManager, GamePrototypeLoadManager>();
+            deps.Register<NetworkResourceManager>();
 
             switch (mode)
             {
@@ -97,8 +109,8 @@ namespace Robust.Client
                     deps.Register<IClyde, ClydeHeadless>();
                     deps.Register<IClipboardManager, ClydeHeadless>();
                     deps.Register<IClydeInternal, ClydeHeadless>();
-                    deps.Register<IClydeAudio, ClydeAudioHeadless>();
-                    deps.Register<IClydeAudioInternal, ClydeAudioHeadless>();
+                    deps.Register<IAudioManager, HeadlessAudioManager>();
+                    deps.Register<IAudioInternal, HeadlessAudioManager>();
                     deps.Register<IInputManager, InputManager>();
                     deps.Register<IFileDialogManager, DummyFileDialogManager>();
                     deps.Register<IUriOpener, UriOpenerDummy>();
@@ -107,8 +119,8 @@ namespace Robust.Client
                     deps.Register<IClyde, Clyde>();
                     deps.Register<IClipboardManager, Clyde>();
                     deps.Register<IClydeInternal, Clyde>();
-                    deps.Register<IClydeAudio, FallbackProxyClydeAudio>();
-                    deps.Register<IClydeAudioInternal, FallbackProxyClydeAudio>();
+                    deps.Register<IAudioManager, AudioManager>();
+                    deps.Register<IAudioInternal, AudioManager>();
                     deps.Register<IInputManager, ClydeInputManager>();
                     deps.Register<IFileDialogManager, FileDialogManager>();
                     deps.Register<IUriOpener, UriOpener>();
@@ -136,7 +148,18 @@ namespace Robust.Client
             deps.Register<IConfigurationManagerInternal, ClientNetConfigurationManager>();
             deps.Register<IClientNetConfigurationManager, ClientNetConfigurationManager>();
             deps.Register<INetConfigurationManagerInternal, ClientNetConfigurationManager>();
+
+#if TOOLS
+            deps.Register<IXamlProxyManager, XamlProxyManager>();
+            deps.Register<IXamlHotReloadManager, XamlHotReloadManager>();
+#else
+            deps.Register<IXamlProxyManager, XamlProxyManagerStub>();
+            deps.Register<IXamlHotReloadManager, XamlHotReloadManagerStub>();
+#endif
+
+            deps.Register<IXamlProxyHelper, XamlProxyHelper>();
             deps.Register<MarkupTagManager>();
+            deps.Register<IHWId, BasicHWId>();
         }
     }
 }

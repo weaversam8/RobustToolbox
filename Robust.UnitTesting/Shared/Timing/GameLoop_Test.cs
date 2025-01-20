@@ -3,6 +3,7 @@ using System.Reflection;
 using Moq;
 using NUnit.Framework;
 using Robust.Shared.Exceptions;
+using Robust.Shared.Log;
 using Robust.Shared.Profiling;
 using Robust.Shared.Timing;
 
@@ -16,7 +17,6 @@ namespace Robust.UnitTesting.Shared.Timing
         ///     With single step enabled, the game loop should run 1 tick and then pause again.
         /// </summary>
         [Test]
-        [Timeout(1000)] // comment this out if you want to debug
         public void SingleStepTest()
         {
             // TimeoutAttribute causes this to run on different thread on .NET Core,
@@ -28,7 +28,12 @@ namespace Robust.UnitTesting.Shared.Timing
             newStopwatch.SetupGet(p => p.Elapsed).Returns(elapsedVal);
             var gameTiming = GameTimingFactory(newStopwatch.Object);
             gameTiming.Paused = false;
-            var loop = new GameLoop(gameTiming, new RuntimeLog(), new ProfManager());
+            var loop = new GameLoop(
+                gameTiming,
+                new RuntimeLog(),
+                new ProfManager(),
+                new LogManager().RootSawmill,
+                new GameLoopOptions(false));
 
             var callCount = 0;
             loop.Tick += (sender, args) => callCount++;

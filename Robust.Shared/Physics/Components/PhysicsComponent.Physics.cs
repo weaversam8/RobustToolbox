@@ -23,19 +23,24 @@
 */
 
 using System.Collections.Generic;
+using System.Numerics;
 using Robust.Shared.GameObjects;
 using Robust.Shared.GameStates;
 using Robust.Shared.Maths;
 using Robust.Shared.Physics.Dynamics.Contacts;
 using Robust.Shared.Physics.Systems;
 using Robust.Shared.Serialization.Manager.Attributes;
+using Robust.Shared.Timing;
 using Robust.Shared.ViewVariables;
 
 namespace Robust.Shared.Physics.Components;
 
 [RegisterComponent, NetworkedComponent]
-public sealed class PhysicsComponent : Component
+public sealed partial class PhysicsComponent : Component, IComponentDelta
 {
+    public GameTick LastFieldUpdate { get; set; }
+    public GameTick[] LastModifiedFields { get; set; }
+
     /// <summary>
     ///     Has this body been added to an island previously in this tick.
     /// </summary>
@@ -56,10 +61,10 @@ public sealed class PhysicsComponent : Component
     /// </summary>
     internal readonly LinkedList<Contact> Contacts = new();
 
-    [DataField("ignorePaused"), ViewVariables(VVAccess.ReadWrite)]
+    [DataField]
     public bool IgnorePaused;
 
-    [DataField("bodyType"), Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute, Other = AccessPermissions.Read)]
+    [DataField, Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute, Other = AccessPermissions.Read)]
     public BodyType BodyType = BodyType.Static;
 
     // We'll also block Static bodies from ever being awake given they don't need to move.
@@ -73,13 +78,11 @@ public sealed class PhysicsComponent : Component
     /// body will be woken.
     /// </summary>
     /// <value><c>true</c> if sleeping is allowed; otherwise, <c>false</c>.</value>
-    [DataField("sleepingAllowed"),
-     Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute,
+    [DataField, Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute,
          Other = AccessPermissions.Read)]
     public bool SleepingAllowed = true;
 
-    [DataField("sleepTime"),
-     Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute,
+    [DataField, Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute,
          Other = AccessPermissions.Read)]
     public float SleepTime = 0f;
 
@@ -89,8 +92,7 @@ public sealed class PhysicsComponent : Component
     /// <remarks>
     ///     Also known as Enabled in Box2D
     /// </remarks>
-    [DataField("canCollide"),
-     Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute,
+    [DataField, Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute,
          Other = AccessPermissions.Read)]
     public bool CanCollide = true;
 
@@ -145,10 +147,10 @@ public sealed class PhysicsComponent : Component
     /// <remarks>
     /// https://en.wikipedia.org/wiki/Moment_of_inertia
     /// </remarks>
-    [ViewVariables(VVAccess.ReadWrite)]
+    [ViewVariables]
     public float Inertia => _inertia + _mass * Vector2.Dot(_localCenter, _localCenter);
 
-    [Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute, Other = AccessPermissions.Read)]
+    [ViewVariables(VVAccess.ReadWrite), Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute, Other = AccessPermissions.Read)]
     // ReSharper disable once InconsistentNaming
     internal float _inertia;
 
@@ -167,7 +169,7 @@ public sealed class PhysicsComponent : Component
     /// <summary>
     ///     Is the body allowed to have angular velocity.
     /// </summary>
-    [ViewVariables(VVAccess.ReadWrite), DataField("fixedRotation"),
+    [ViewVariables(VVAccess.ReadWrite), DataField,
      Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute, Other = AccessPermissions.Read)]
     public bool FixedRotation = true;
 
@@ -188,7 +190,7 @@ public sealed class PhysicsComponent : Component
     /// The force is applied to the center of mass.
     /// https://en.wikipedia.org/wiki/Force
     /// </remarks>
-    [ViewVariables(VVAccess.ReadWrite), DataField("force"),
+    [ViewVariables(VVAccess.ReadWrite), DataField,
      Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute, Other = AccessPermissions.Read)]
     public Vector2 Force;
 
@@ -199,7 +201,7 @@ public sealed class PhysicsComponent : Component
     /// The torque rotates around the Z axis on the object.
     /// https://en.wikipedia.org/wiki/Torque
     /// </remarks>
-    [ViewVariables(VVAccess.ReadWrite), DataField("torque"),
+    [ViewVariables(VVAccess.ReadWrite), DataField,
      Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute, Other = AccessPermissions.Read)]
     public float Torque;
 
@@ -215,7 +217,7 @@ public sealed class PhysicsComponent : Component
     ///     This is a set amount that the body's linear velocity is reduced by every tick.
     ///     Combined with the tile friction.
     /// </summary>
-    [ViewVariables(VVAccess.ReadWrite), DataField("linearDamping"),
+    [DataField,
      Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute,
          Other = AccessPermissions.Read)]
     public float LinearDamping = 0.2f;
@@ -225,7 +227,7 @@ public sealed class PhysicsComponent : Component
     ///     Combined with the tile friction.
     /// </summary>
     /// <returns></returns>
-    [ViewVariables(VVAccess.ReadWrite), DataField("angularDamping"),
+    [DataField,
      Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute,
          Other = AccessPermissions.Read)]
     public float AngularDamping = 0.2f;
@@ -259,15 +261,9 @@ public sealed class PhysicsComponent : Component
     /// <summary>
     ///     The current status of the object
     /// </summary>
-    [Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute, Other = AccessPermissions.Read)]
+    [DataField, Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute, Other = AccessPermissions.Read)]
     public BodyStatus BodyStatus { get; set; }
 
-    [ViewVariables(VVAccess.ReadWrite)]
-    public bool Predict
-    {
-        get => _predict;
-        set => _predict = value;
-    }
-
-    private bool _predict;
+    [ViewVariables, Access(typeof(SharedPhysicsSystem))]
+    public bool Predict;
 }

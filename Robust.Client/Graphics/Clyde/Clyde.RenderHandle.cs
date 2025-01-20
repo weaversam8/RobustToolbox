@@ -1,9 +1,11 @@
 using System;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using Robust.Client.GameObjects;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Maths;
 using OpenToolkit.Graphics.OpenGL4;
+using Robust.Shared.Graphics;
 
 namespace Robust.Client.Graphics.Clyde
 {
@@ -13,7 +15,7 @@ namespace Robust.Client.Graphics.Clyde
     {
         private RenderHandle _renderHandle = default!;
 
-        private sealed class RenderHandle : IRenderHandle
+        internal sealed class RenderHandle : IRenderHandle
         {
             private readonly Clyde _clyde;
             private readonly IEntityManager _entities;
@@ -26,16 +28,22 @@ namespace Robust.Client.Graphics.Clyde
                 _clyde = clyde;
                 _entities = entities;
 
-                DrawingHandleScreen = new DrawingHandleScreenImpl(this);
-                DrawingHandleWorld = new DrawingHandleWorldImpl(this);
+                var white = _clyde.GetStockTexture(ClydeStockTexture.White);
+                DrawingHandleScreen = new DrawingHandleScreenImpl(white, this);
+                DrawingHandleWorld = new DrawingHandleWorldImpl(white, this);
             }
 
-            public void SetModelTransform(in Matrix3 matrix)
+            public void SetModelTransform(in Matrix3x2 matrix)
             {
                 _clyde.DrawSetModelTransform(matrix);
             }
 
-            public void SetProjView(in Matrix3 proj, in Matrix3 view)
+            public Matrix3x2 GetModelTransform()
+            {
+                return _clyde.DrawGetModelTransform();
+            }
+
+            public void SetProjView(in Matrix3x2 proj, in Matrix3x2 view)
             {
                 _clyde.DrawSetProjViewTransform(proj, view);
             }
@@ -80,16 +88,21 @@ namespace Robust.Client.Graphics.Clyde
             {
                 var clydeTexture = ExtractTexture(texture, in subRegion, out var csr);
 
-                var (w, h) = clydeTexture.Size;
-                var sr = new Box2(csr.Left / w, (h - csr.Bottom) / h, csr.Right / w, (h - csr.Top) / h);
+                var sr = WorldTextureBoundsToUV(clydeTexture, csr);
 
                 _clyde.DrawTexture(clydeTexture.TextureId, bl, br, tl, tr, in modulate, in sr);
+            }
+
+            internal static Box2 WorldTextureBoundsToUV(ClydeTexture texture, UIBox2 csr)
+            {
+                var (w, h) = texture.Size;
+                return new Box2(csr.Left / w, (h - csr.Bottom) / h, csr.Right / w, (h - csr.Top) / h);
             }
 
             /// <summary>
             /// Converts a subRegion (px) into texture coords (0-1) of a given texture (cells of the textureAtlas).
             /// </summary>
-            private static ClydeTexture ExtractTexture(Texture texture, in UIBox2? subRegion, out UIBox2 sr)
+            internal static ClydeTexture ExtractTexture(Texture texture, in UIBox2? subRegion, out UIBox2 sr)
             {
                 if (texture is AtlasTexture atlas)
                 {
@@ -164,9 +177,9 @@ namespace Robust.Client.Graphics.Clyde
                 var oldModel = _clyde._currentMatrixModel;
 
                 var newModel = oldModel;
-                position += (oldModel.R0C2, oldModel.R1C2);
-                newModel.R0C2 = 0;
-                newModel.R1C2 = 0;
+                position += new Vector2(oldModel.M31, oldModel.M32);
+                newModel.M31 = 0;
+                newModel.M32 = 0;
                 SetModelTransform(newModel);
 
                 // Switch rendering to pseudo-world space.
@@ -181,7 +194,7 @@ namespace Robust.Client.Graphics.Clyde
                     // Maaaaybe this is meant to have a minus sign.
                     var rot = -(float) eyeRot.Theta;
 
-                    var view = Matrix3.CreateTransform(ofsX, ofsY, rot, scale.X, scale.Y);
+                    var view = Matrix3Helpers.CreateTransform(ofsX, ofsY, rot, scale.X, scale.Y);
                     SetProjView(proj, view);
                 }
 
@@ -219,7 +232,14 @@ namespace Robust.Client.Graphics.Clyde
 
                 var clydeShader = (ClydeShaderInstance?) shader;
 
-                _clyde.DrawUseShader(clydeShader?.Handle ?? _clyde._defaultShader.Handle);
+                _clyde.DrawUseShader(clydeShader ?? _clyde._defaultShader);
+            }
+
+            public ShaderInstance? GetShader()
+            {
+                return _clyde._queuedShaderInstance == _clyde._defaultShader
+                    ? null
+                    : _clyde._queuedShaderInstance;
             }
 
             public void Viewport(Box2i viewport)
@@ -272,19 +292,29 @@ namespace Robust.Client.Graphics.Clyde
             {
                 private readonly RenderHandle _renderHandle;
 
-                public DrawingHandleScreenImpl(RenderHandle renderHandle)
+                public DrawingHandleScreenImpl(Texture white, RenderHandle renderHandle) : base(white)
                 {
                     _renderHandle = renderHandle;
                 }
 
-                public override void SetTransform(in Matrix3 matrix)
+                public override void SetTransform(in Matrix3x2 matrix)
                 {
                     _renderHandle.SetModelTransform(matrix);
+                }
+
+                public override Matrix3x2 GetTransform()
+                {
+                    return _renderHandle.GetModelTransform();
                 }
 
                 public override void UseShader(ShaderInstance? shader)
                 {
                     _renderHandle.UseShader(shader);
+                }
+
+                public override ShaderInstance? GetShader()
+                {
+                    return _renderHandle.GetShader();
                 }
 
                 public override void DrawPrimitives(DrawPrimitiveTopology primitiveTopology, Texture texture,
@@ -313,7 +343,7 @@ namespace Robust.Client.Graphics.Clyde
                 {
                     if (filled)
                     {
-                        DrawTextureRect(Texture.White, rect, color);
+                        DrawTextureRect(White, rect, color);
                     }
                     else
                     {
@@ -330,6 +360,11 @@ namespace Robust.Client.Graphics.Clyde
                     var color = (modulate ?? Color.White) * Modulate;
                     _renderHandle.DrawTextureScreen(texture, rect.TopLeft, rect.TopRight,
                         rect.BottomLeft, rect.BottomRight, color, subRegion);
+                }
+
+                public override void DrawTexture(Texture texture, Vector2 position, Color? modulate = null)
+                {
+                    base.DrawTexture(texture, position, modulate);
                 }
 
                 /// <summary>
@@ -367,19 +402,29 @@ namespace Robust.Client.Graphics.Clyde
             {
                 private readonly RenderHandle _renderHandle;
 
-                public DrawingHandleWorldImpl(RenderHandle renderHandle)
+                public DrawingHandleWorldImpl(Texture white, RenderHandle renderHandle) : base(white)
                 {
                     _renderHandle = renderHandle;
                 }
 
-                public override void SetTransform(in Matrix3 matrix)
+                public override void SetTransform(in Matrix3x2 matrix)
                 {
                     _renderHandle.SetModelTransform(matrix);
+                }
+
+                public override Matrix3x2 GetTransform()
+                {
+                    return _renderHandle.GetModelTransform();
                 }
 
                 public override void UseShader(ShaderInstance? shader)
                 {
                     _renderHandle.UseShader(shader);
+                }
+
+                public override ShaderInstance? GetShader()
+                {
+                    return _renderHandle.GetShader();
                 }
 
                 public override void DrawCircle(Vector2 position, float radius, Color color, bool filled = true)
@@ -413,7 +458,7 @@ namespace Robust.Client.Graphics.Clyde
                             filledTriangle[1] = new DrawVertexUV2DColor(endPos + position, colorReal);
                             filledTriangle[2] = new DrawVertexUV2DColor(position, colorReal);
 
-                            _renderHandle.DrawPrimitives(DrawPrimitiveTopology.TriangleList, Texture.White, filledTriangle);
+                            _renderHandle.DrawPrimitives(DrawPrimitiveTopology.TriangleList, White, filledTriangle);
                         }
                     }
                 }
@@ -432,7 +477,7 @@ namespace Robust.Client.Graphics.Clyde
                 {
                     if (filled)
                     {
-                        DrawTextureRect(Texture.White, rect, color);
+                        DrawTextureRect(White, rect, color);
                     }
                     else
                     {
@@ -447,7 +492,7 @@ namespace Robust.Client.Graphics.Clyde
                 {
                     if (filled)
                     {
-                        DrawTextureRect(Texture.White, rect, color);
+                        DrawTextureRect(White, rect, color);
                     }
                     else
                     {

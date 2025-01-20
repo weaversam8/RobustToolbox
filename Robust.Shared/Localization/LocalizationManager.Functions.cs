@@ -1,31 +1,32 @@
-﻿#nullable enable
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Linguini.Bundle;
-using Linguini.Bundle.Types;
 using Linguini.Shared.Types.Bundle;
 using Robust.Shared.Enums;
 using Robust.Shared.GameObjects;
 using Robust.Shared.GameObjects.Components.Localization;
-using Robust.Shared.IoC;
 using Robust.Shared.Maths;
 
 namespace Robust.Shared.Localization
 {
     internal sealed partial class LocalizationManager
     {
+        private static readonly Regex RegexWordMatch = new Regex(@"\w+");
+
         private void AddBuiltInFunctions(FluentBundle bundle)
         {
             // Grammatical gender / pronouns
             AddCtxFunction(bundle, "GENDER", FuncGender);
             AddCtxFunction(bundle, "SUBJECT", FuncSubject);
             AddCtxFunction(bundle, "OBJECT", FuncObject);
+            AddCtxFunction(bundle, "DAT-OBJ", FuncDatObj);
             AddCtxFunction(bundle, "POSS-ADJ", FuncPossAdj);
             AddCtxFunction(bundle, "POSS-PRONOUN", FuncPossPronoun);
             AddCtxFunction(bundle, "REFLEXIVE", FuncReflexive);
+            AddCtxFunction(bundle, "COUNTER", FuncCounter);
 
             // Conjugation
             AddCtxFunction(bundle, "CONJUGATE-BE", FuncConjugateBe);
@@ -107,7 +108,7 @@ namespace Robust.Shared.Localization
             var a = new LocValueString("a");
             var an = new LocValueString("an");
 
-            var m = Regex.Match(input, @"\w+");
+            var m = RegexWordMatch.Match(input);
             if (m.Success)
             {
                 word = m.Groups[0].Value;
@@ -173,7 +174,7 @@ namespace Robust.Shared.Localization
             {
                 EntityUid entity = (EntityUid)entity0.Value;
 
-                if (_entMan.TryGetComponent<GrammarComponent?>(entity, out var grammar) && grammar.Gender.HasValue)
+                if (_entMan.TryGetComponent(entity, out GrammarComponent? grammar) && grammar.Gender.HasValue)
                 {
                     return new LocValueString(grammar.Gender.Value.ToString().ToLowerInvariant());
                 }
@@ -204,6 +205,16 @@ namespace Robust.Shared.Localization
         }
 
         /// <summary>
+        /// Returns the dative form pronoun for the entity's gender.
+        /// This method is intended for languages with a dative case, where indirect objects
+        /// (e.g., "to him," "for her") require specific forms. Not applicable for en-US locale.
+        /// </summary>
+        private ILocValue FuncDatObj(LocArgs args)
+        {
+            return new LocValueString(GetString("zzzz-dat-object", ("ent", args.Args[0])));
+        }
+
+        /// <summary>
         /// Returns the respective possessive adjective (his, her, their, its) for the entity's gender.
         /// </summary>
         private ILocValue FuncPossAdj(LocArgs args)
@@ -225,6 +236,27 @@ namespace Robust.Shared.Localization
         private ILocValue FuncReflexive(LocArgs args)
         {
             return new LocValueString(GetString("zzzz-reflexive-pronoun", ("ent", args.Args[0])));
+        }
+
+        /// <summary>
+        /// Returns the counter or measure word for the entity. Not used in English, common in East Asian languages.
+        /// </summary>
+        private ILocValue FuncCounter(LocArgs args)
+        {
+            if (args.Args.Count < 1) return new LocValueString(GetString("zzzz-counter-default"));
+
+            ILocValue entity0 = args.Args[0];
+            if (entity0.Value != null)
+            {
+                EntityUid entity = (EntityUid)entity0.Value;
+
+                if (TryGetEntityLocAttrib(entity, "counter", out var counter))
+                {
+                    return new LocValueString(counter);
+                }
+            }
+
+            return new LocValueString(GetString("zzzz-counter-default"));
         }
 
         /// <summary>
@@ -285,7 +317,7 @@ namespace Robust.Shared.Localization
             {
                 EntityUid entity = (EntityUid)entity0.Value;
 
-                if (_entMan.TryGetComponent<GrammarComponent?>(entity, out var grammar) && grammar.ProperNoun.HasValue)
+                if (_entMan.TryGetComponent(entity, out GrammarComponent? grammar) && grammar.ProperNoun.HasValue)
                 {
                     return new LocValueString(grammar.ProperNoun.Value.ToString().ToLowerInvariant());
                 }
@@ -302,8 +334,7 @@ namespace Robust.Shared.Localization
 
         private void AddCtxFunction(FluentBundle ctx, string name, LocFunction function)
         {
-            ctx.AddFunction(name, (args, options)
-                => CallFunction(function, ctx, args, options), out _, InsertBehavior.Overriding);
+            ctx.AddFunctionOverriding(name, (args, options) => CallFunction(function, ctx, args, options));
         }
 
         private IFluentType CallFunction(
@@ -332,8 +363,8 @@ namespace Robust.Shared.Localization
         {
             var bundle = _contexts[culture];
 
-            bundle.AddFunction(name, (args, options)
-                => CallFunction(function, bundle, args, options), out _, InsertBehavior.Overriding);
+            bundle.AddFunctionOverriding(name, (args, options)
+                => CallFunction(function, bundle, args, options));
         }
     }
 
@@ -351,6 +382,32 @@ namespace Robust.Shared.Localization
         public string AsString()
         {
             return WrappedValue.Format(_context);
+        }
+
+        public bool IsError()
+        {
+            return false;
+        }
+
+        public bool Matches(IFluentType other, IScope scope)
+        {
+            if (other is FluentLocWrapperType otherWrapper)
+            {
+                return (WrappedValue, otherWrapper.WrappedValue) switch
+                {
+                    (LocValueNone, LocValueNone) => true,
+                    (LocValueDateTime l, LocValueDateTime d) => l.Value.Equals(d.Value),
+                    (LocValueTimeSpan l, LocValueTimeSpan d) => l.Value.Equals(d.Value),
+                    (LocValueNumber l, LocValueNumber d) => l.Value.Equals(d.Value),
+                    (LocValueString l, LocValueString d) => l.Value.Equals(d.Value),
+                    (LocValueEntity l, LocValueEntity d) => l.Value.Equals(d.Value),
+                    ({ } l, { } d) => Equals(l, d),
+                    _ => false,
+                };
+            }
+
+            return false;
+
         }
 
         public IFluentType Copy()
@@ -379,6 +436,7 @@ namespace Robust.Shared.Localization
             {
                 ILocValue wrap => new FluentLocWrapperType(wrap, context),
                 EntityUid entity => new FluentLocWrapperType(new LocValueEntity(entity), context),
+                IFluentEntityUid entity => new FluentLocWrapperType(new LocValueEntity(entity.FluentOwner), context),
                 DateTime dateTime => new FluentLocWrapperType(new LocValueDateTime(dateTime), context),
                 TimeSpan timeSpan => new FluentLocWrapperType(new LocValueTimeSpan(timeSpan), context),
                 Color color => (FluentString)color.ToHex(),
@@ -409,4 +467,9 @@ namespace Robust.Shared.Localization
             };
         }
     }
+
+    internal interface IFluentEntityUid
+    {
+        internal EntityUid FluentOwner { get; }
+    };
 }

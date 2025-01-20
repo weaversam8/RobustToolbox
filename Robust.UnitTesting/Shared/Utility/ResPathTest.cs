@@ -2,9 +2,6 @@
 using NUnit.Framework;
 using Robust.Shared.Utility;
 
-// ReSharper disable AccessToStaticMemberViaDerivedType
-
-
 namespace Robust.UnitTesting.Shared.Utility;
 
 [TestFixture]
@@ -130,6 +127,7 @@ public sealed class ResPathTest
     [TestCase("a/b", "a", ExpectedResult = "b")]
     [TestCase("/bar/", "/", ExpectedResult = "bar")]
     [TestCase("/Textures/Weapons/laser.png", "/Textures/", ExpectedResult = "Weapons/laser.png")]
+    [TestCase("foo.txt", ".", ExpectedResult = "foo.txt")]
     public string RelativeToTest(string source, string baseDir)
     {
         var path = new ResPath(source);
@@ -207,7 +205,7 @@ public sealed class ResPathTest
         Assert.That(empty?.Extension, Is.EqualTo(""));
         Assert.That(empty?.Filename, Is.EqualTo("."));
         Assert.That(empty?.FilenameWithoutExtension, Is.EqualTo("."));
-        Assert.False(empty.Equals(null));
+        Assert.That(empty.Equals(null), Is.False);
     }
 
     [Test]

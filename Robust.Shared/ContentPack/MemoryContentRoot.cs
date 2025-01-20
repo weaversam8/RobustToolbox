@@ -55,6 +55,35 @@ public sealed class MemoryContentRoot : IContentRoot, IDisposable
         }
     }
 
+    /// <summary>
+    ///     Removes ALL files from this content root.
+    /// </summary>
+    public void Clear()
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            _files.Clear();
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
+        }
+    }
+
+    public bool FileExists(ResPath relPath)
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            return _files.ContainsKey(relPath);
+        }
+        finally
+        {
+            _lock.ExitReadLock();
+        }
+    }
+
     /// <inheritdoc />
     public bool TryGetFile(ResPath relPath, [NotNullWhen(true)] out Stream? stream)
     {

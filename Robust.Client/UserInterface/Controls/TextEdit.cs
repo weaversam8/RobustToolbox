@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Diagnostics.Contracts;
 using System.Numerics;
@@ -12,7 +13,7 @@ using Robust.Shared.Maths;
 using Robust.Shared.Timing;
 using Robust.Shared.Utility;
 using Robust.Shared.ViewVariables;
-using Vector2 = Robust.Shared.Maths.Vector2;
+using Vector2 = System.Numerics.Vector2;
 
 namespace Robust.Client.UserInterface.Controls;
 
@@ -88,6 +89,8 @@ public sealed class TextEdit : Control
     // Debug overlay stuff.
     internal bool DebugOverlay;
     private Vector2? _lastDebugMousePos;
+
+    public event Action<TextEditEventArgs>? OnTextChanged;
 
     public TextEdit()
     {
@@ -228,7 +231,7 @@ public sealed class TextEdit : Control
     private bool IsPlaceholderVisible => Rope.IsNullOrEmpty(_textRope) && _placeholder != null;
 
     // Table used by cursor movement system, see below.
-    private static readonly Dictionary<BoundKeyFunction, MoveType> MoveTypeMap = new()
+    private static readonly FrozenDictionary<BoundKeyFunction, MoveType> MoveTypeMap = new Dictionary<BoundKeyFunction, MoveType>()
     {
         // @formatter:off
         { EngineKeyFunctions.TextCursorLeft,            MoveType.Left        },
@@ -249,7 +252,7 @@ public sealed class TextEdit : Control
         { EngineKeyFunctions.TextCursorSelectBegin,     MoveType.BeginOfLine | MoveType.SelectFlag },
         { EngineKeyFunctions.TextCursorSelectEnd,       MoveType.EndOfLine   | MoveType.SelectFlag },
         // @formatter:on
-    };
+    }.ToFrozenDictionary();
 
     protected internal override void KeyBindDown(GUIBoundKeyEventArgs args)
     {
@@ -314,7 +317,7 @@ public sealed class TextEdit : Control
                 if (changed)
                 {
                     _selectionStart = _cursorPosition;
-                    // OnTextChanged?.Invoke(new LineEditEventArgs(this, _text));
+                    OnTextChanged?.Invoke(new TextEditEventArgs(this, _textRope));
                     // _updatePseudoClass();
                     // OnBackspace?.Invoke(new LineEditBackspaceEventArgs(oldText, _text, cursor, selectStart));
                 }
@@ -348,7 +351,7 @@ public sealed class TextEdit : Control
                 if (changed)
                 {
                     _selectionStart = _cursorPosition;
-                    // OnTextChanged?.Invoke(new LineEditEventArgs(this, _text));
+                    OnTextChanged?.Invoke(new TextEditEventArgs(this, _textRope));
                     // _updatePseudoClass();
                 }
 
@@ -381,7 +384,10 @@ public sealed class TextEdit : Control
                 }
 
                 if (changed)
+                {
                     _selectionStart = _cursorPosition;
+                    OnTextChanged?.Invoke(new TextEditEventArgs(this, _textRope));
+                }
 
                 InvalidateHorizontalCursorPos();
                 args.Handle();
@@ -410,7 +416,10 @@ public sealed class TextEdit : Control
                 }
 
                 if (changed)
+                {
                     _selectionStart = _cursorPosition;
+                    OnTextChanged?.Invoke(new TextEditEventArgs(this, _textRope));
+                }
 
                 InvalidateHorizontalCursorPos();
                 args.Handle();
@@ -567,7 +576,7 @@ public sealed class TextEdit : Control
 
                 var newPos = CursorShiftedLeft();
                 // Explicit newlines work kinda funny with bias, so keep it at top there.
-                var bias = Rope.Index(TextRope, newPos) == '\n'
+                var bias = _cursorPosition.Index == TextLength || Rope.Index(TextRope, newPos) == '\n'
                     ? LineBreakBias.Top
                     : LineBreakBias.Bottom;
 
@@ -747,6 +756,7 @@ public sealed class TextEdit : Control
 
             var startPos = _cursorPosition;
             TextRope = Rope.Insert(TextRope, startPos.Index, ev.Text);
+            OnTextChanged?.Invoke(new TextEditEventArgs(this, _textRope));
 
             _selectionStart = _cursorPosition = new CursorPos(startPos.Index + startChars, LineBreakBias.Top);
             _imeData = (startPos, ev.Text.Length);
@@ -776,9 +786,11 @@ public sealed class TextEdit : Control
     {
         var size = base.ArrangeOverride(finalSize);
 
-        _scrollBar.Page = size.Y * UIScale;
+        var renderBoxSize = _renderBox.Size;
 
-        UpdateLineBreaks((int)(size.X * UIScale));
+        _scrollBar.Page = renderBoxSize.Y * UIScale;
+
+        UpdateLineBreaks((int)(renderBoxSize.X * UIScale));
 
         return size;
     }
@@ -841,6 +853,7 @@ public sealed class TextEdit : Control
         var upper = SelectionUpper.Index;
 
         TextRope = Rope.ReplaceSubstring(TextRope, lower, upper - lower, text);
+        OnTextChanged?.Invoke(new TextEditEventArgs(this, _textRope));
 
         _selectionStart = _cursorPosition = new CursorPos(lower + text.Length, LineBreakBias.Top);
         // OnTextChanged?.Invoke(new LineEditEventArgs(this, _text));
@@ -927,6 +940,13 @@ public sealed class TextEdit : Control
 
     private CursorPos GetIndexAtHorizontalPos(int line, float horizontalPos)
     {
+        // If the placeholder is visible, this function does not return correct results because it looks at TextRope,
+        // but _lineBreaks is configured for the display rope.
+        // Bail out early in this case, the function is not currently used in any situation in any location
+        // where something else is desired if the placeholder is visible.
+        if (IsPlaceholderVisible)
+            return default;
+
         var contentBox = PixelSizeBox;
         var font = GetFont();
         var uiScale = UIScale;
@@ -1171,19 +1191,19 @@ public sealed class TextEdit : Control
         // Arrow shapes/data for the debug overlay.
         private static readonly (Vector2, Vector2)[] ArrowUp =
         {
-            ((8, 14), (8, 2)),
-            ((4, 7), (8, 2)),
-            ((12, 7), (8, 2)),
+            (new(8, 14), new(8, 2)),
+            (new(4, 7), new(8, 2)),
+            (new(12, 7), new(8, 2)),
         };
 
         private static readonly (Vector2, Vector2)[] ArrowDown =
         {
-            ((8, 14), (8, 2)),
-            ((4, 9), (8, 14)),
-            ((12, 9), (8, 14)),
+            (new(8, 14), new(8, 2)),
+            (new(4, 9), new(8, 14)),
+            (new(12, 9), new(8, 14)),
         };
 
-        private static readonly Vector2 ArrowSize = (16, 16);
+        private static readonly Vector2 ArrowSize = new(16, 16);
 
         private readonly TextEdit _master;
 
@@ -1209,8 +1229,8 @@ public sealed class TextEdit : Control
             if (_master.DebugOverlay && _master._horizontalCursorPos is { } hPos)
             {
                 handle.DrawLine(
-                    (hPos + drawBox.Left, drawBox.Top),
-                    (hPos + drawBox.Left, drawBox.Bottom),
+                    new(hPos + drawBox.Left, drawBox.Top),
+                    new(hPos + drawBox.Left, drawBox.Bottom),
                     Color.Purple);
             }
 
@@ -1346,15 +1366,16 @@ public sealed class TextEdit : Control
                             baseLine.Y + descent),
                         cursorColor);
 
-                    if (UserInterfaceManager.KeyboardFocused == _master)
+                    if (UserInterfaceManager.KeyboardFocused == _master && Root?.Window is { } window)
                     {
                         var box = (UIBox2i)new UIBox2(
-                            baseLine.X,
+                            drawBox.Left,
                             baseLine.Y - height + descent,
                             drawBox.Right,
                             baseLine.Y + descent);
+                        var cursorOffset = baseLine.X - drawBox.Left;
 
-                        _master._clyde.TextInputSetRect(box.Translated(GlobalPixelPosition));
+                        window.TextInputSetRect(box.Translated(GlobalPixelPosition), (int) cursorOffset);
                     }
                 }
 
@@ -1426,7 +1447,7 @@ public sealed class TextEdit : Control
 
         if (Editable)
         {
-            _clyde.TextInputStart();
+            Root?.Window?.TextInputStart();
         }
     }
 
@@ -1434,8 +1455,14 @@ public sealed class TextEdit : Control
     {
         base.KeyboardFocusExited();
 
-        _clyde.TextInputStop();
+        Root?.Window?.TextInputStop();
         AbortIme(delete: false);
+    }
+
+    public sealed class TextEditEventArgs(TextEdit control, Rope.Node textRope) : EventArgs
+    {
+        public TextEdit Control { get; } = control;
+        public Rope.Node TextRope { get; } = textRope;
     }
 
     /// <summary>

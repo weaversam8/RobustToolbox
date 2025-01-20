@@ -2,6 +2,7 @@ using System;
 using Moq;
 using NUnit.Framework;
 using Robust.Shared.GameObjects;
+using Robust.Shared.Reflection;
 
 namespace Robust.UnitTesting.Shared.GameObjects
 {
@@ -12,8 +13,9 @@ namespace Robust.UnitTesting.Shared.GameObjects
         {
             var compFacMock = new Mock<IComponentFactory>();
             var entManMock = new Mock<IEntityManager>();
+            var reflectMock = new Mock<IReflectionManager>();
             entManMock.SetupGet(e => e.ComponentFactory).Returns(compFacMock.Object);
-            var bus = new EntityEventBus(entManMock.Object);
+            var bus = new EntityEventBus(entManMock.Object, reflectMock.Object);
             return bus;
         }
 
@@ -50,6 +52,27 @@ namespace Robust.UnitTesting.Shared.GameObjects
             Assert.Throws<ArgumentNullException>(Code);
         }
 
+        /// <summary>
+        /// Duplicate Event subscriptions are not allowed.
+        /// </summary>
+        [Test]
+        public void SubscribeEvent_DuplicateSubscription_Invalid()
+        {
+            // Arrange
+            var bus = BusFactory();
+            var subscriber = new TestEventSubscriber();
+
+            int delegateCallCount = 0;
+            void Handler(TestEventArgs ev) => delegateCallCount++;
+
+            // 2 subscriptions 1 handler
+            bus.SubscribeEvent<TestEventArgs>(EventSource.Local, subscriber, Handler);
+
+            Assert.Throws<InvalidOperationException>(() => bus.SubscribeEvent<TestEventArgs>(EventSource.Local, subscriber, Handler));
+        }
+
+        // TODO if ever duplicate events are allowed, re-enable these tests.
+        /*
         /// <summary>
         /// Unlike C# events, the set of event handler delegates is unique.
         /// Subscribing the same delegate multiple times will only call the handler once.
@@ -99,6 +122,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
             Assert.That(delFooCount, Is.EqualTo(1));
             Assert.That(delBarCount, Is.EqualTo(1));
         }
+        */
 
         /// <summary>
         /// A subscriber's handlers are properly called only when the specified event type is raised.
@@ -115,6 +139,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
 
             bus.SubscribeEvent<TestEventArgs>(EventSource.Local, subscriber, ev => delFooCount++);
             bus.SubscribeEvent<TestEventTwoArgs>(EventSource.Local, subscriber, ev => delBarCount++);
+            bus.LockSubscriptions();
 
             // Act & Assert
             bus.RaiseEvent(EventSource.Local, new TestEventArgs());
@@ -162,6 +187,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
 
             bus.SubscribeEvent<TestEventArgs>(EventSource.Local, subscriber, Handler);
             bus.UnsubscribeEvent<TestEventArgs>(EventSource.Local, subscriber);
+            bus.LockSubscriptions();
 
             // Act
             bus.UnsubscribeEvent<TestEventArgs>(EventSource.Local, subscriber);
@@ -231,6 +257,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
 
             int delCalledCount = 0;
             bus.SubscribeEvent<TestEventTwoArgs>(EventSource.Local, subscriber, ev => delCalledCount++);
+            bus.LockSubscriptions();
 
             // Act
             bus.RaiseEvent(EventSource.Local, new TestEventArgs());
@@ -254,6 +281,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
 
             bus.SubscribeEvent<TestEventArgs>(EventSource.Local, subscriber, Handler);
             bus.UnsubscribeEvent<TestEventArgs>(EventSource.Local, subscriber);
+            bus.LockSubscriptions();
 
             // Act
             bus.RaiseEvent(EventSource.Local, new TestEventArgs());
@@ -326,6 +354,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
 
             bus.SubscribeEvent<TestEventArgs>(EventSource.Local, subscriber, Handler);
             bus.UnsubscribeEvents(subscriber);
+            bus.LockSubscriptions();
 
             // Act
             bus.RaiseEvent(EventSource.Local, new TestEventArgs());
@@ -403,6 +432,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
             void Handler(TestEventArgs ev) => delCallCount++;
 
             bus.SubscribeEvent<TestEventArgs>(EventSource.Local, subscriber, Handler);
+            bus.LockSubscriptions();
             bus.QueueEvent(EventSource.Local, new TestEventArgs());
 
             // Act
@@ -442,6 +472,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
             bus.SubscribeEvent<TestEventArgs>(EventSource.Local, new SubA(), HandlerA, typeof(SubA), before: new []{typeof(SubB), typeof(SubC)});
             bus.SubscribeEvent<TestEventArgs>(EventSource.Local, new SubB(), HandlerB, typeof(SubB), after: new []{typeof(SubC)});
             bus.SubscribeEvent<TestEventArgs>(EventSource.Local, new SubC(), HandlerC, typeof(SubC));
+            bus.LockSubscriptions();
 
             // Act
             bus.RaiseEvent(EventSource.Local, new TestEventArgs());

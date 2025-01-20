@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
+using System.Text.Json.Serialization;
 using JetBrains.Annotations;
 using Robust.Shared.Collections;
 using Robust.Shared.Serialization;
@@ -91,6 +92,7 @@ public readonly struct ResPath : IEquatable<ResPath>
     ///     Assert.AreEqual("/foo", new ResPath("/foo/x.txt").Directory.ToString());
     /// </code>
     /// </example>
+    [JsonIgnore]
     public ResPath Directory
     {
         get
@@ -393,7 +395,7 @@ public readonly struct ResPath : IEquatable<ResPath>
             return relative.Value;
         }
 
-        throw new ArgumentException($"{CanonPath} does not start with {basePath}.");
+        throw new ArgumentException($"{CanonPath} does not start with '{basePath}'.");
     }
 
     /// <summary>
@@ -411,11 +413,18 @@ public readonly struct ResPath : IEquatable<ResPath>
             return true;
         }
 
+        // "foo.txt" is relative to "."
+        if (basePath == Self && IsRelative)
+        {
+            relative = this;
+            return true;
+        }
+
         if (CanonPath.StartsWith(basePath.CanonPath))
         {
             var x = CanonPath[basePath.CanonPath.Length..]
                 .Trim('/');
-            relative = new ResPath(x);
+            relative = x == "" ? Self : new ResPath(x);
             return true;
         }
 
@@ -450,9 +459,11 @@ public readonly struct ResPath : IEquatable<ResPath>
             return this;
         }
 
-        return this == Root
-            ? Self
-            : new ResPath(CanonPath[1..]);
+        if (this == Root)
+            return Self;
+
+        var newPath = new ResPath(CanonPath[1..]);
+        return newPath.IsRelative ? newPath : newPath.ToRelativePath();
     }
 
     /// <summary>
@@ -556,6 +567,66 @@ public static class ResPathUtil
         return sb.Length == 0
             ? ResPath.Self
             : new ResPath(sb.ToString());
+    }
+
+    /// <summary>
+    /// Gets the segments in common with 2 paths.
+    /// </summary>
+    public static ResPath GetCommonSegments(this ResPath path, ResPath other)
+    {
+        var segmentsA = path.EnumerateSegments();
+        var segmentsB = other.EnumerateSegments();
+
+        var count = Math.Min(segmentsA.Length, segmentsB.Length);
+        var common = new ValueList<string>();
+
+        for (var i = 0; i < count; i++)
+        {
+            if (segmentsA[i] == segmentsB[i])
+            {
+                common.Add(segmentsA[i]);
+                continue;
+            }
+
+            break;
+        }
+
+        return new ResPath(string.Join(ResPath.Separator, common));
+    }
+
+    /// <summary>
+    /// Gets the next segment after where the common segments end.
+    /// </summary>
+    public static ResPath GetNextSegment(this ResPath path, ResPath other)
+    {
+        var segmentsA = path.EnumerateSegments();
+        var segmentsB = other.EnumerateSegments();
+
+        var count = Math.Min(segmentsA.Length, segmentsB.Length);
+        var matched = 0;
+        var nextSegment = string.Empty;
+
+        for (var i = 0; i < count; i++)
+        {
+            if (segmentsA[i] == segmentsB[i])
+            {
+                nextSegment = segmentsA[i];
+                matched++;
+                continue;
+            }
+
+            break;
+        }
+
+        if (matched < segmentsA.Length)
+        {
+            // Is this the easiest way to tell it's a file?
+            // Essentially once we know how far we matched we want the next segment along if it exists
+            // Also add in the trailing separator if it's a directory.
+            nextSegment = segmentsA[matched] + (matched != segmentsA.Length - 1 || path.Extension.Length == 0 ? ResPath.SeparatorStr : string.Empty);
+        }
+
+        return new ResPath(nextSegment);
     }
 
     /// <summary>

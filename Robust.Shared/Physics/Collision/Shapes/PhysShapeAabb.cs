@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using JetBrains.Annotations;
 using Robust.Shared.Configuration;
 using Robust.Shared.IoC;
@@ -17,7 +18,7 @@ namespace Robust.Shared.Physics.Collision.Shapes
     /// </summary>
     [Serializable, NetSerializable]
     [DataDefinition]
-    public sealed class PhysShapeAabb : IPhysShape, IEquatable<PhysShapeAabb>
+    public sealed partial class PhysShapeAabb : IPhysShape, IEquatable<PhysShapeAabb>
     {
         public int ChildCount => 1;
 

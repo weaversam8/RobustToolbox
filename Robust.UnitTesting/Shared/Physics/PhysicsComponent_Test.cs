@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Numerics;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using Robust.Shared.GameObjects;
@@ -31,12 +32,12 @@ namespace Robust.UnitTesting.Shared.Physics
 
             await server.WaitAssertion(() =>
             {
-                var mapId = mapManager.CreateMap();
+                entManager.System<SharedMapSystem>().CreateMap(out var mapId);
                 var boxEnt = entManager.SpawnEntity(null, new MapCoordinates(Vector2.Zero, mapId));
                 var box = entManager.AddComponent<PhysicsComponent>(boxEnt);
                 var poly = new PolygonShape();
                 poly.SetAsBox(0.5f, 0.5f);
-                fixtureSystem.CreateFixture(boxEnt, new Fixture(poly, 0, 0, false), body: box);
+                fixtureSystem.CreateFixture(boxEnt, "fix1", new Fixture(poly, 0, 0, false), body: box);
                 physicsSystem.SetFixedRotation(boxEnt, false, body: box);
                 physicsSystem.SetBodyType(boxEnt, BodyType.Dynamic, body: box);
                 Assert.That(box.InvI, Is.GreaterThan(0f));

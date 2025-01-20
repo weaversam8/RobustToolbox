@@ -1,6 +1,7 @@
 ﻿using Robust.Shared.Maths;
 using Robust.Shared.Serialization;
 using System;
+using System.Numerics;
 using JetBrains.Annotations;
 using Robust.Shared.Utility;
 
@@ -13,6 +14,8 @@ namespace Robust.Shared.Map
     [Serializable, NetSerializable]
     public readonly struct ScreenCoordinates : IEquatable<ScreenCoordinates>, ISpanFormattable
     {
+        public static readonly ScreenCoordinates Invalid = new(Vector2.Zero, WindowId.Invalid);
+
         /// <summary>
         ///     Position on the rendering screen.
         /// </summary>

@@ -13,6 +13,7 @@ using Robust.Shared.Log;
 using Robust.Shared.Network;
 using Robust.Shared.Profiling;
 using Robust.Shared.Reflection;
+using Robust.Shared.Replays;
 using Robust.Shared.Timing;
 
 namespace Robust.UnitTesting.Shared.GameObjects
@@ -26,6 +27,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
             public int X;
         }
 
+        [Reflect(false)]
         private abstract class TestSystemBase : IEntitySystem
         {
             public Counter? Counter;
@@ -46,21 +48,25 @@ namespace Robust.UnitTesting.Shared.GameObjects
 
         // Expected update order is is A -> D -> C -> B
 
+        [Reflect(false)]
         private sealed class TestSystemA : TestSystemBase
         {
 
         }
 
+        [Reflect(false)]
         private sealed class TestSystemB : TestSystemBase
         {
             public override IEnumerable<Type> UpdatesAfter => new[] {typeof(TestSystemA)};
         }
 
+        [Reflect(false)]
         private sealed class TestSystemC : TestSystemBase
         {
             public override IEnumerable<Type> UpdatesBefore => new[] {typeof(TestSystemB)};
         }
 
+        [Reflect(false)]
         private sealed class TestSystemD : TestSystemBase
         {
             public override IEnumerable<Type> UpdatesAfter => new[] {typeof(TestSystemA)};
@@ -83,6 +89,8 @@ namespace Robust.UnitTesting.Shared.GameObjects
             deps.RegisterInstance<IModLoader>(new Mock<IModLoader>().Object);
             deps.Register<IEntitySystemManager, EntitySystemManager>();
             deps.RegisterInstance<IEntityManager>(new Mock<IEntityManager>().Object);
+            // WHEN WILL THE SUFFERING END
+            deps.RegisterInstance<IReplayRecordingManager>(new Mock<IReplayRecordingManager>().Object);
 
             var reflectionMock = new Mock<IReflectionManager>();
             reflectionMock.Setup(p => p.GetAllChildren<IEntitySystem>(false))

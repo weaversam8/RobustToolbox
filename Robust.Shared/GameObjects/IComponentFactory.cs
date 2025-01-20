@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using JetBrains.Annotations;
 using Robust.Shared.GameStates;
 using Robust.Shared.Prototypes;
 
@@ -50,8 +51,7 @@ namespace Robust.Shared.GameObjects
     /// <seealso cref="IComponent" />
     public interface IComponentFactory
     {
-        event Action<ComponentRegistration> ComponentAdded;
-        event Action<ComponentRegistration, CompIdx> ComponentReferenceAdded;
+        event Action<ComponentRegistration[]> ComponentsAdded;
         event Action<string> ComponentIgnoreAdded;
 
         /// <summary>
@@ -77,6 +77,22 @@ namespace Robust.Shared.GameObjects
         /// <returns>The availability of the component.</returns>
         ComponentAvailability GetComponentAvailability(string componentName, bool ignoreCase = false);
 
+        public void RegisterNetworkedFields<T>(params string[] fields) where T : IComponent;
+
+        public void RegisterNetworkedFields(ComponentRegistration compReg, params string[] fields);
+
+        /// <summary>
+        /// Slow-path for Type -> CompIdx mapping without generics.
+        /// </summary>
+        [Pure]
+        CompIdx GetIndex(Type type);
+
+        /// <summary>
+        /// Slow-path to get the component index for a specified type.
+        /// </summary>
+        [Pure]
+        int GetArrayIndex(Type type);
+
         /// <summary>
         /// Registers a component class with the factory.
         /// </summary>
@@ -84,17 +100,23 @@ namespace Robust.Shared.GameObjects
         void RegisterClass<T>(bool overwrite = false) where T : IComponent, new();
 
         /// <summary>
+        /// Registers component types with the factory.
+        /// </summary>
+        void RegisterTypes(params Type[] type);
+
+        /// <summary>
         /// Registers a component name as being ignored.
         /// </summary>
-        /// <param name="name">The name to be ignored.</param>
-        /// <param name="overwrite">Whether to override existing settings instead of throwing an exception in the case of duplicates.</param>
-        void RegisterIgnore(string name, bool overwrite = false);
+        /// <param name="names">The names to be ignored.</param>
+        void RegisterIgnore(params string[] names);
 
         /// <summary>
         /// Disables throwing on missing components. Missing components will instead be treated as ignored.
         /// </summary>
         /// <param name="postfix">If provided, will only ignore components ending with the postfix.</param>
         void IgnoreMissingComponents(string postfix = "");
+
+        IComponent GetComponent(EntityPrototype.ComponentRegistryEntry entry);
 
         /// <summary>
         /// Gets a new component instantiated of the specified type.
@@ -153,7 +175,22 @@ namespace Robust.Shared.GameObjects
         /// <exception cref="UnknownComponentException">
         ///     Thrown if no component exists with the given type <see cref="componentType"/>.
         /// </exception>
+        [Pure]
         string GetComponentName(Type componentType);
+
+        [Pure]
+        string GetComponentName<T>() where T : IComponent, new();
+
+        /// <summary>
+        ///     Gets the name of a component, throwing an exception if it does not exist.
+        /// </summary>
+        /// <param name="netID">The network ID corresponding to the component.</param>
+        /// <returns>The registered name of the component</returns>
+        /// <exception cref="UnknownComponentException">
+        ///     Thrown if no component with id <see cref="netID"/> exists.
+        /// </exception>
+        [Pure]
+        string GetComponentName(ushort netID);
 
         /// <summary>
         ///     Gets the registration belonging to a component, throwing an exception if it does not exist.
@@ -258,9 +295,16 @@ namespace Robust.Shared.GameObjects
         /// </summary>
         void DoAutoRegistrations();
 
+        IEnumerable<ComponentRegistration> GetAllRegistrations();
         IEnumerable<CompIdx> GetAllRefTypes();
         void GenerateNetIds();
 
         Type IdxToType(CompIdx idx);
+
+        /// <summary>
+        /// Gets a hash of all the registered components.
+        /// </summary>
+        /// <param name="networkedOnly">Whether to include all components or only networked ones.</param>
+        byte[] GetHash(bool networkedOnly);
     }
 }

@@ -1,6 +1,6 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using JetBrains.Annotations;
-using Robust.Shared.IoC;
 using Robust.Shared.Reflection;
 using Robust.Shared.Serialization.Markdown;
 using Robust.Shared.Serialization.Markdown.Validation;
@@ -391,6 +391,20 @@ namespace Robust.Shared.Serialization.Manager
             bool notNullableOverride = false)
             where TCopyCreator : ITypeCopyCreator<T>;
 
+        [Obsolete]
+        bool TryGetCopierOrCreator<TType>(
+            out ITypeCopier<TType>? copier,
+            out ITypeCopyCreator<TType>? copyCreator,
+            ISerializationContext? context = null);
+
+        [Obsolete]
+        bool TryCustomCopy<T>(
+            T source,
+            ref T target,
+            SerializationHookContext hookCtx,
+            bool hasHooks,
+            ISerializationContext? context = null);
+
         #endregion
 
         #region Flags And Constants
@@ -427,5 +441,7 @@ namespace Robust.Shared.Serialization.Manager
         }
 
         #endregion
+
+        public bool TryGetVariableType(Type type, string variableName, [NotNullWhen(true)] out Type? variableType);
     }
 }

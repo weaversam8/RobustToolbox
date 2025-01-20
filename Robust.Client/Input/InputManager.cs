@@ -4,10 +4,12 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text;
 using JetBrains.Annotations;
 using Robust.Client.UserInterface;
+using Robust.Shared.Collections;
 using Robust.Shared.Console;
 using Robust.Shared.ContentPack;
 using Robust.Shared.Input;
@@ -63,6 +65,8 @@ namespace Robust.Client.Input
         [ViewVariables] private readonly List<KeyBinding> _bindings = new();
         private readonly bool[] _keysPressed = new bool[256];
 
+        private ValueList<Func<BoundKeyEventArgs, bool>> _uiKeyBindStateChanged;
+
         /// <inheritdoc />
         [ViewVariables]
         public BoundKeyMap NetworkBindMap { get; private set; } = default!;
@@ -72,7 +76,11 @@ namespace Robust.Client.Input
         public IInputContextContainer Contexts { get; } = new InputContextContainer();
 
         /// <inheritdoc />
-        public event Func<BoundKeyEventArgs, bool>? UIKeyBindStateChanged;
+        public event Func<BoundKeyEventArgs, bool> UIKeyBindStateChanged
+        {
+            add => _uiKeyBindStateChanged.Add(value);
+            remove => _uiKeyBindStateChanged.Remove(value);
+        }
 
         /// <inheritdoc />
         public event Action<ViewportBoundKeyEventArgs>? KeyBindStateChanged;
@@ -116,12 +124,19 @@ namespace Robust.Client.Input
             var path = new ResPath(KeybindsPath);
             if (_resourceMan.UserData.Exists(path))
             {
-                LoadKeyFile(path, true);
+                try
+                {
+                    LoadKeyFile(path, false, true);
+                }
+                catch (Exception e)
+                {
+                    Logger.ErrorS("input", "Failed to load user keybindings: " + e);
+                }
             }
 
             if (_resourceMan.ContentFileExists(path))
             {
-                LoadKeyFile(path, false);
+                LoadKeyFile(path, true);
             }
         }
 
@@ -331,7 +346,7 @@ namespace Robust.Client.Input
                 {
                     if (binding.CanRepeat)
                     {
-                        return SetBindState(binding, BoundKeyState.Down, uiOnly);
+                        return SetBindState(binding, BoundKeyState.Down, uiOnly, isRepeat);
                     }
 
                     return true;
@@ -360,7 +375,7 @@ namespace Robust.Client.Input
             SetBindState(binding, BoundKeyState.Up);
         }
 
-        private bool SetBindState(KeyBinding binding, BoundKeyState state, bool uiOnly = false)
+        private bool SetBindState(KeyBinding binding, BoundKeyState state, bool uiOnly = false, bool isRepeat = false)
         {
             if (binding.BindingType == KeyBindingType.Command && state == BoundKeyState.Down)
             {
@@ -372,6 +387,7 @@ namespace Robust.Client.Input
             // I honestly have no idea what the best solution here is.
             // note from the future: context switches won't cause re-entrancy anymore because InputContextContainer defers context switches
             DebugTools.Assert(!_currentlyFindingViewport, "Re-entrant key events??");
+            DebugTools.Assert(!isRepeat || binding.CanRepeat);
 
             try
             {
@@ -384,11 +400,18 @@ namespace Robust.Client.Input
                 binding.State = state;
 
                 var eventArgs = new BoundKeyEventArgs(binding.Function, binding.State,
-                    MouseScreenPosition, binding.CanFocus);
+                    MouseScreenPosition, binding.CanFocus, isRepeat);
 
                 // UI returns true here into blockPass if it wants to prevent us from giving input events
                 // to the viewport, but doesn't want it hard-handled so we keep processing possible key actions.
-                var blockPass = UIKeyBindStateChanged?.Invoke(eventArgs);
+                //
+                // I wouldn't normally use an unordered event subscription, but hey I'm fixing a bloody bug here ok.
+                var blockPass = false;
+                foreach (var stateChangedHandler in _uiKeyBindStateChanged)
+                {
+                    blockPass |= stateChangedHandler(eventArgs);
+                }
+
                 if ((state == BoundKeyState.Up || (!(blockPass == true || eventArgs.Handled) && !uiOnly))
                     && _currentlyFindingViewport)
                 {
@@ -474,7 +497,13 @@ namespace Robust.Client.Input
             return true;
         }
 
-        private void LoadKeyFile(ResPath file, bool userData)
+        /// <summary>
+        /// Loads a keybind file, configuring keybinds.
+        /// </summary>
+        /// <param name="file">File to load from the content package</param>
+        /// <param name="defaultRegistration">Whether or not this is a "default" keybind set. If it is, then it won't override the current configuration, only the defaults.</param>
+        /// <param name="userData">Whether or not to load from the user data directory instead of the content package.</param>
+        public void LoadKeyFile(ResPath file, bool defaultRegistration, bool userData = false)
         {
             TextReader reader;
             if (userData)
@@ -495,16 +524,19 @@ namespace Robust.Client.Input
             {
                 var baseKeyRegs = _serialization.Read<KeyBindingRegistration[]>(BaseKeyRegsNode, notNullableOverride: true);
 
+
                 foreach (var reg in baseKeyRegs)
                 {
+                    var invalid = false;
+
                     if (reg.Type != KeyBindingType.Command && !NetworkBindMap.FunctionExists(reg.Function.FunctionName))
                     {
-                        Logger.ErrorS("input", "Key function in {0} does not exist: '{1}'", file,
+                        Logger.DebugS("input", "Key function in {0} does not exist: '{1}'.", file,
                             reg.Function);
-                        continue;
+                        invalid = true;
                     }
 
-                    if (!userData)
+                    if (defaultRegistration)
                     {
                         _defaultRegistrations.Add(reg);
 
@@ -516,19 +548,24 @@ namespace Robust.Client.Input
                         }
                     }
 
-                    RegisterBinding(reg, markModified: userData);
+                    RegisterBinding(reg, markModified: !defaultRegistration, invalid);
                 }
             }
 
-            if (userData && mapping.TryGet("leaveEmpty", out var node))
+            if (!defaultRegistration && mapping.TryGet("leaveEmpty", out var node))
             {
                 var leaveEmpty = _serialization.Read<BoundKeyFunction[]>(node, notNullableOverride: true);
 
-                if (leaveEmpty.Length > 0)
+                foreach (var bind in leaveEmpty)
                 {
                     // Adding to _modifiedKeyFunctions means that these keybinds won't be loaded from the base file.
                     // Because they've been explicitly cleared.
-                    _modifiedKeyFunctions.UnionWith(leaveEmpty);
+                    _modifiedKeyFunctions.Add(bind);
+
+                    // Adding to bindingsByFunction because if the keybind is not valid(For example if it's from another
+                    // server then we will have problems saving the file)
+                    _bindingsByFunction.GetOrNew(bind);
+
                 }
             }
         }
@@ -556,7 +593,7 @@ namespace Robust.Client.Input
             return binding;
         }
 
-        public IKeyBinding RegisterBinding(in KeyBindingRegistration reg, bool markModified = true)
+        public IKeyBinding RegisterBinding(in KeyBindingRegistration reg, bool markModified = true, bool invalid = false)
         {
             var binding = new KeyBinding(this, reg.Function.FunctionName, reg.Type, reg.BaseKey, reg.CanFocus, reg.CanRepeat,
                 reg.AllowSubCombs, reg.Priority, reg.Mod1, reg.Mod2, reg.Mod3);
@@ -587,7 +624,7 @@ namespace Robust.Client.Input
 
         public void InputModeChanged() => OnInputModeChanged?.Invoke();
 
-        private void RegisterBinding(KeyBinding binding, bool markModified = true)
+        private void RegisterBinding(KeyBinding binding, bool markModified = true, bool invalid = false)
         {
             // we sort larger combos first so they take priority over smaller (single key) combos,
             // so they get processed first in KeyDown and such.
@@ -602,7 +639,8 @@ namespace Robust.Client.Input
                 _modifiedKeyFunctions.Add(binding.Function);
             }
 
-            _bindings.Insert(pos, binding);
+            if (!invalid)
+                _bindings.Insert(pos, binding);
             _bindingsByFunction.GetOrNew(binding.Function).Add(binding);
             OnKeyBindingAdded?.Invoke(binding);
         }

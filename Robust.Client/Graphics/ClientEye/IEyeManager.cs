@@ -1,4 +1,7 @@
-﻿using Robust.Client.UserInterface.CustomControls;
+using System;
+using System.Numerics;
+using Robust.Client.UserInterface.CustomControls;
+using Robust.Shared.Graphics;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
 
@@ -11,26 +14,29 @@ namespace Robust.Client.Graphics
     public interface IEyeManager
     {
         /// <summary>
-        /// The current eye that is being used to render the game.
+        /// The primary eye, which is usually the eye associated with the main viewport.
         /// </summary>
         /// <remarks>
+        /// Generally, you should avoid using this whenever possible. E.g., when rendering overlays should use the
+        /// eye & viewbounds that gets passed to the draw method.
         /// Setting this property to null will use the default eye.
         /// </remarks>
         IEye CurrentEye { get; set; }
 
         IViewportControl MainViewport { get; set; }
 
-        /// <summary>
-        /// The ID of the map on which the current eye is "placed".
-        /// </summary>
+        [Obsolete]
         MapId CurrentMap { get; }
 
         /// <summary>
-        /// A world-space box that is at LEAST the area covered by the viewport.
+        /// A world-space box that is at LEAST the area covered by the main viewport.
         /// May be larger due to say rotation.
         /// </summary>
         Box2 GetWorldViewport();
 
+        /// <summary>
+        /// A world-space box of the area visible in the main viewport.
+        /// </summary>
         Box2Rotated GetWorldViewbounds();
 
         /// <summary>
@@ -38,10 +44,10 @@ namespace Robust.Client.Graphics
         /// to UI screen space.
         /// </summary>
         /// <param name="projMatrix"></param>
-        void GetScreenProjectionMatrix(out Matrix3 projMatrix);
+        void GetScreenProjectionMatrix(out Matrix3x2 projMatrix);
 
         /// <summary>
-        /// Projects a point from world space to UI screen space using the current camera.
+        /// Projects a point from world space to UI screen space using the main viewport.
         /// </summary>
         /// <param name="point">Point in world to transform.</param>
         /// <returns>Corresponding point in UI screen space.</returns>
@@ -77,6 +83,16 @@ namespace Robust.Client.Graphics
         /// <param name="point">Point on screen to transform.</param>
         /// <returns>Corresponding point in the world.</returns>
         MapCoordinates ScreenToMap(Vector2 point);
+
+        /// <summary>
+        /// Similar to <see cref="ScreenToMap(ScreenCoordinates)"/>, except it should compensate for the effects of shaders on viewports.
+        /// </summary>
+        MapCoordinates PixelToMap(ScreenCoordinates point);
+
+        /// <summary>
+        /// Similar to <see cref="ScreenToMap(Vector2)"/>, except it should compensate for the effects of shaders on viewports.
+        /// </summary>
+        MapCoordinates PixelToMap(Vector2 point);
 
         void ClearCurrentEye();
         void Initialize();

@@ -1,20 +1,23 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Numerics;
 using System.Threading.Tasks;
 using Robust.Client.UserInterface;
 using Robust.Client.UserInterface.Controls;
 using Robust.Client.UserInterface.CustomControls;
 using Robust.Client.ViewVariables.Editors;
 using Robust.Client.ViewVariables.Instances;
+using Robust.Shared.Audio;
+using Robust.Shared.ContentPack;
 using Robust.Shared.GameObjects;
 using Robust.Shared.IoC;
-using Robust.Shared.Log;
+using Robust.Shared.Localization;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
 using Robust.Shared.Network;
 using Robust.Shared.Network.Messages;
-using Robust.Shared.Players;
+using Robust.Shared.Player;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Serialization;
 using Robust.Shared.ViewVariables;
@@ -28,6 +31,8 @@ namespace Robust.Client.ViewVariables
         [Dependency] private readonly IClientNetManager _netManager = default!;
         [Dependency] private readonly IRobustSerializer _robustSerializer = default!;
         [Dependency] private readonly IEntityManager _entityManager = default!;
+        [Dependency] private readonly IPrototypeManager _protoManager = default!;
+        [Dependency] private readonly IResourceManager _resManager = default!;
 
         private uint _nextReqId = 1;
         private readonly Vector2i _defaultWindowSize = (640, 420);
@@ -125,6 +130,26 @@ namespace Robust.Client.ViewVariables
                 return new VVPropEditorString();
             }
 
+            if (type == typeof(EntProtoId?))
+            {
+                return new VVPropEditorNullableEntProtoId();
+            }
+
+            if (type == typeof(EntProtoId))
+            {
+                return new VVPropEditorEntProtoId();
+            }
+
+            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(ProtoId<>))
+            {
+                var editor =
+                    (VVPropEditor)Activator.CreateInstance(
+                        typeof(VVPropEditorProtoId<>).MakeGenericType(type.GenericTypeArguments[0]))!;
+
+                IoCManager.InjectDependencies(editor);
+                return editor;
+            }
+
             if (typeof(IPrototype).IsAssignableFrom(type) || typeof(ViewVariablesBlobMembers.PrototypeReferenceToken).IsAssignableFrom(type))
             {
                 return (VVPropEditor)Activator.CreateInstance(typeof(VVPropEditorIPrototype<>).MakeGenericType(type))!;
@@ -190,6 +215,11 @@ namespace Robust.Client.ViewVariables
                 return new VVPropEditorEntityUid();
             }
 
+            if (type == typeof(NetEntity))
+            {
+                return new VVPropEditorNetEntity();
+            }
+
             if (type == typeof(Color))
             {
                 return new VVPropEditorColor();
@@ -198,6 +228,12 @@ namespace Robust.Client.ViewVariables
             if (type == typeof(TimeSpan))
             {
                 return new VVPropEditorTimeSpan();
+            }
+
+            if (typeof(SoundSpecifier).IsAssignableFrom(type))
+            {
+                var control = new VVPropEditorSoundSpecifier(_protoManager, _resManager);
+                return control;
             }
 
             if (type == typeof(ViewVariablesBlobMembers.ServerKeyValuePairToken) ||
@@ -218,16 +254,16 @@ namespace Robust.Client.ViewVariables
         {
             // TODO: more flexibility in allowing custom instances here.
             ViewVariablesInstance instance;
-            if (obj is EntityUid entity && _entityManager.EntityExists(entity))
+            if (obj is NetEntity netEntity && _entityManager.GetEntity(netEntity).IsValid())
             {
-                instance = new ViewVariablesInstanceEntity(this, _entityManager, _robustSerializer);
+                instance = new ViewVariablesInstanceEntity(this, _entityManager, _robustSerializer, Sawmill);
             }
             else
             {
                 instance = new ViewVariablesInstanceObject(this, _robustSerializer);
             }
 
-            var window = new DefaultWindow {Title = "View Variables"};
+            var window = new DefaultWindow {Title = Loc.GetString("view-variables")};
             instance.Initialize(window, obj);
             window.OnClose += () => _closeInstance(instance, false);
             _windows.Add(instance, window);
@@ -245,7 +281,7 @@ namespace Robust.Client.ViewVariables
         {
             var window = new DefaultWindow
             {
-                Title = "View Variables",
+                Title = Loc.GetString("view-variables"),
                 SetSize = _defaultWindowSize
             };
             var loadingLabel = new Label {Text = "Retrieving remote object data from server..."};
@@ -269,9 +305,9 @@ namespace Robust.Client.ViewVariables
             var type = Type.GetType(blob.ObjectType);
             // TODO: more flexibility in allowing custom instances here.
             ViewVariablesInstance instance;
-            if (type != null && typeof(EntityUid).IsAssignableFrom(type))
+            if (type != null && typeof(NetEntity).IsAssignableFrom(type))
             {
-                instance = new ViewVariablesInstanceEntity(this, _entityManager, _robustSerializer);
+                instance = new ViewVariablesInstanceEntity(this, _entityManager, _robustSerializer, Sawmill);
             }
             else
             {
@@ -371,7 +407,7 @@ namespace Robust.Client.ViewVariables
         {
             if (!_requestedSessions.TryGetValue(msg.RequestId, out var tcs))
             {
-                Logger.ErrorS("vv", "Server sent us new session {0}/{1} which we didn't request.", msg.RequestId,
+                Sawmill.Error("Server sent us new session {0}/{1} which we didn't request.", msg.RequestId,
                     msg.SessionId);
                 return;
             }
@@ -386,7 +422,7 @@ namespace Robust.Client.ViewVariables
         {
             if (!_sessions.TryGetValue(message.SessionId, out var session))
             {
-                Logger.WarningS("vv", "Got a close session message for an unknown session: {0}", message.SessionId);
+                Sawmill.Warning("Got a close session message for an unknown session: {0}", message.SessionId);
                 return;
             }
 
@@ -398,7 +434,7 @@ namespace Robust.Client.ViewVariables
         {
             if (!_requestedData.TryGetValue(message.RequestId, out var tcs))
             {
-                Logger.WarningS("vv", "Server sent us data we didn't request: {0}.", message.RequestId);
+                Sawmill.Warning("Server sent us data we didn't request: {0}.", message.RequestId);
                 return;
             }
 
@@ -410,7 +446,7 @@ namespace Robust.Client.ViewVariables
         {
             if (!_requestedSessions.TryGetValue(message.RequestId, out var tcs))
             {
-                Logger.WarningS("vv", "Server sent us a deny session {0} which we didn't request.", message.RequestId);
+                Sawmill.Warning("Server sent us a deny session {0} which we didn't request.", message.RequestId);
                 return;
             }
 
@@ -418,7 +454,7 @@ namespace Robust.Client.ViewVariables
             tcs.SetException(new SessionDenyException(message.Reason));
         }
 
-        protected override bool CheckPermissions(INetChannel channel)
+        protected override bool CheckPermissions(INetChannel channel, string command)
         {
             // Acquiesce, client!! Do what the server tells you.
             return true;

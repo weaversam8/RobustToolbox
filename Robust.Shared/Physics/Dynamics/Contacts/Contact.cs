@@ -29,6 +29,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using Robust.Shared.GameObjects;
 using Robust.Shared.IoC;
 using Robust.Shared.Maths;
@@ -36,6 +37,7 @@ using Robust.Shared.Physics.Collision;
 using Robust.Shared.Physics.Collision.Shapes;
 using Robust.Shared.Physics.Components;
 using Robust.Shared.Physics.Systems;
+using Robust.Shared.ViewVariables;
 
 namespace Robust.Shared.Physics.Dynamics.Contacts
 {
@@ -68,8 +70,14 @@ namespace Robust.Shared.Physics.Dynamics.Contacts
         public EntityUid EntityA;
         public EntityUid EntityB;
 
+        public string FixtureAId = string.Empty;
+        public string FixtureBId = string.Empty;
+
         public Fixture? FixtureA;
         public Fixture? FixtureB;
+
+        public PhysicsComponent? BodyA;
+        public PhysicsComponent? BodyB;
 
         public Manifold Manifold;
 
@@ -89,11 +97,13 @@ namespace Robust.Shared.Physics.Dynamics.Contacts
         /// <summary>
         ///     Determines whether the contact is touching.
         /// </summary>
+        [ViewVariables]
         public bool IsTouching { get; internal set; }
 
         /// Enable/disable this contact. This can be used inside the pre-solve
         /// contact listener. The contact is only disabled for the current
         /// time step (or sub-step in continuous collisions).
+        [ViewVariables]
         public bool Enabled { get; set; }
 
         /// <summary>
@@ -128,7 +138,7 @@ namespace Robust.Shared.Physics.Dynamics.Contacts
 
         public void ResetFriction()
         {
-            Friction = MathF.Sqrt(FixtureA?.Friction ?? 0.0f * FixtureB?.Friction ?? 0.0f);
+            Friction = MathF.Sqrt((FixtureA?.Friction ?? 0.0f) * (FixtureB?.Friction ?? 0.0f));
         }
 
         /// <summary>
@@ -235,6 +245,27 @@ namespace Robust.Shared.Physics.Dynamics.Contacts
         }
 
         /// <summary>
+        /// Trimmed down version of <see cref="Update"/> that only updates whether or not the contact's shapes are
+        /// touching.
+        /// </summary>
+        internal void UpdateIsTouching(Transform bodyATransform, Transform bodyBTransform)
+        {
+            var sensor = !(FixtureA!.Hard && FixtureB!.Hard);
+            if (sensor)
+            {
+                var shapeA = FixtureA!.Shape;
+                var shapeB = FixtureB!.Shape;
+                IsTouching = _manifoldManager.TestOverlap(shapeA,  ChildIndexA, shapeB, ChildIndexB, bodyATransform, bodyBTransform);
+            }
+            else
+            {
+                var manifold = Manifold;
+                Evaluate(ref manifold, bodyATransform, bodyBTransform);
+                IsTouching = manifold.PointCount > 0;
+            }
+        }
+
+        /// <summary>
         ///     Evaluate this contact with your own manifold and transforms.
         /// </summary>
         /// <param name="manifold">The manifold.</param>
@@ -259,19 +290,23 @@ namespace Robust.Shared.Physics.Dynamics.Contacts
                     _manifoldManager.CollideEdgeAndPolygon(ref manifold, (EdgeShape) FixtureA!.Shape, transformA, (PolygonShape) FixtureB!.Shape, transformB);
                     break;
                 case ContactType.ChainAndCircle:
-                    throw new NotImplementedException();
-                    /*
-                    ChainShape chain = (ChainShape)FixtureA.Shape;
-                    chain.GetChildEdge(_edge, ChildIndexA);
-                    Collision.CollisionManager.CollideEdgeAndCircle(ref manifold, _edge, ref transformA, (CircleShape)FixtureB.Shape, ref transformB);
-                    */
+                {
+                    var chain = (ChainShape) FixtureA!.Shape;
+                    var edge = _manifoldManager.GetContactEdge();
+                    chain.GetChildEdge(ref edge, ChildIndexA);
+                    _manifoldManager.CollideEdgeAndCircle(ref manifold, edge, in transformA, (PhysShapeCircle) FixtureB!.Shape, in transformB);
+                    _manifoldManager.ReturnEdge(edge);
+                    break;
+                }
                 case ContactType.ChainAndPolygon:
-                    throw new NotImplementedException();
-                    /*
-                    ChainShape loop2 = (ChainShape)FixtureA.Shape;
-                    loop2.GetChildEdge(_edge, ChildIndexA);
-                    Collision.CollisionManager.CollideEdgeAndPolygon(ref manifold, _edge, ref transformA, (PolygonShape)FixtureB.Shape, ref transformB);
-                    */
+                {
+                    var loop2 = (ChainShape) FixtureA!.Shape;
+                    var edge = _manifoldManager.GetContactEdge();
+                    loop2.GetChildEdge(ref edge, ChildIndexA);
+                    _manifoldManager.CollideEdgeAndPolygon(ref manifold, edge, in transformA, (PolygonShape) FixtureB!.Shape, in transformB);
+                    _manifoldManager.ReturnEdge(edge);
+                    break;
+                }
                 case ContactType.Circle:
                     _manifoldManager.CollideCircles(ref manifold, (PhysShapeCircle) FixtureA!.Shape, in transformA, (PhysShapeCircle) FixtureB!.Shape, in transformB);
                     break;
@@ -315,7 +350,30 @@ namespace Robust.Shared.Physics.Dynamics.Contacts
         public override int GetHashCode()
         {
             // TODO: Need to suss this out
-            return HashCode.Combine((FixtureA != null ? FixtureA.Body.Owner : EntityUid.Invalid), (FixtureB != null ? FixtureB.Body.Owner : EntityUid.Invalid));
+            return HashCode.Combine(EntityA, EntityB);
+        }
+
+        /// <summary>
+        /// Gets the other ent for this contact.
+        /// </summary>
+        public EntityUid OtherEnt(EntityUid uid)
+        {
+            if (uid == EntityA)
+                return EntityB;
+            else if (uid == EntityB)
+                return EntityA;
+
+            throw new InvalidOperationException();
+        }
+
+        public (string Id, Fixture) OtherFixture(EntityUid uid)
+        {
+            if (uid == EntityA)
+                return (FixtureBId, FixtureB!);
+            else if (uid == EntityB)
+                return (FixtureAId, FixtureA!);
+
+            throw new InvalidOperationException();
         }
     }
 
@@ -323,19 +381,35 @@ namespace Robust.Shared.Physics.Dynamics.Contacts
     internal enum ContactFlags : byte
     {
         None = 0,
+
+        /// <summary>
+        /// Is the contact pending its first manifold generation.
+        /// </summary>
+        PreInit = 1 << 0,
+
         /// <summary>
         ///     Has this contact already been added to an island?
         /// </summary>
-        Island = 1 << 0,
+        Island = 1 << 1,
 
         /// <summary>
         ///     Does this contact need re-filtering?
         /// </summary>
-        Filter = 1 << 1,
+        Filter = 1 << 2,
 
         /// <summary>
         /// Is this a special contact for grid-grid collisions
         /// </summary>
-        Grid = 1 << 2,
+        Grid = 1 << 3,
+
+        /// <summary>
+        /// Set right before the contact is deleted
+        /// </summary>
+        Deleting = 1 << 4,
+
+        /// <summary>
+        /// Set after a contact has been deleted and returned to the contact pool.
+        /// </summary>
+        Deleted = 1 << 5,
     }
 }

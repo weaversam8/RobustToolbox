@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Numerics;
 using NetSerializer;
 using NUnit.Framework;
+using Robust.Shared.Maths;
+using Robust.Shared.Serialization;
 
 namespace Robust.UnitTesting.Shared.Serialization
 {
@@ -29,7 +32,7 @@ namespace Robust.UnitTesting.Shared.Serialization
             serializer.DeserializeDirect<List<int>?>(stream, out var deserialized);
             if (list == null)
             {
-                Assert.Null(deserialized);
+                Assert.That(deserialized, Is.Null);
             }
             else
             {
@@ -56,7 +59,7 @@ namespace Robust.UnitTesting.Shared.Serialization
             serializer.DeserializeDirect<Dictionary<string, int>?>(stream, out var deserialized);
             if (list == null)
             {
-                Assert.Null(deserialized);
+                Assert.That(deserialized, Is.Null);
             }
             else
             {
@@ -82,12 +85,41 @@ namespace Robust.UnitTesting.Shared.Serialization
             serializer.DeserializeDirect<HashSet<int>?>(stream, out var deserialized);
             if (set == null)
             {
-                Assert.Null(deserialized);
+                Assert.That(deserialized, Is.Null);
             }
             else
             {
                 Assert.That(deserialized, Is.EquivalentTo(set));
             }
+        }
+
+        public static readonly Vector2[] Vector2Values =
+        {
+            Vector2.Zero,
+            Vector2.One,
+            Vector2Helpers.NaN,
+            Vector2Helpers.Infinity,
+            new(-1f, -1f),
+            new(10f, -10f),
+            new(-10f, 10f),
+        };
+
+        [Test]
+        public void TestVector2([ValueSource(nameof(Vector2Values))] Vector2 vec)
+        {
+            var serializer = new Serializer(new[] {typeof(Vector2)}, new Settings()
+            {
+                CustomTypeSerializers = new ITypeSerializer[]
+                {
+                    new Vector2Serializer(),
+                }
+            });
+            var stream = new MemoryStream();
+            serializer.SerializeDirect(stream, vec);
+            stream.Position = 0;
+            serializer.DeserializeDirect(stream, out Vector2 read);
+
+            Assert.That(read, NUnit.Framework.Is.EqualTo(vec));
         }
 
         [Test]

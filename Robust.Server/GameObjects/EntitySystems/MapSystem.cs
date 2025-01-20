@@ -1,32 +1,44 @@
-using System.Collections.Generic;
 using System.Linq;
+using Robust.Server.GameStates;
 using Robust.Shared;
+using Robust.Shared.Collections;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
 using Robust.Shared.IoC;
+using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Map.Events;
-using Robust.Shared.Physics.Dynamics;
 
 namespace Robust.Server.GameObjects
 {
     public sealed class MapSystem : SharedMapSystem
     {
         [Dependency] private readonly IConfigurationManager _cfg = default!;
+        [Dependency] private readonly PvsSystem _pvs = default!;
 
         private bool _deleteEmptyGrids;
+
+        protected override MapId GetNextMapId()
+        {
+            var id = new MapId(++LastMapId);
+            while (MapManager.MapExists(id))
+            {
+                id = new MapId(++LastMapId);
+            }
+            return id;
+        }
+
+        protected override void UpdatePvsChunks(Entity<TransformComponent, MetaDataComponent> grid)
+        {
+            _pvs.GridParentChanged(grid);
+        }
 
         public override void Initialize()
         {
             base.Initialize();
             SubscribeLocalEvent<MapGridComponent, EmptyGridEvent>(HandleGridEmpty);
 
-            _cfg.OnValueChanged(CVars.GameDeleteEmptyGrids, SetGridDeletion, true);
-        }
-
-        protected override void OnMapAdd(EntityUid uid, MapComponent component, ComponentAdd args)
-        {
-            EnsureComp<PhysicsMapComponent>(uid);
+            Subs.CVar(_cfg, CVars.GameDeleteEmptyGrids, SetGridDeletion, true);
         }
 
         private void SetGridDeletion(bool value)
@@ -36,40 +48,34 @@ namespace Robust.Server.GameObjects
             // If we have any existing empty ones then cull them on setting the cvar
             if (_deleteEmptyGrids)
             {
-                var toDelete = new List<MapGridComponent>();
+                var toDelete = new ValueList<EntityUid>();
 
-                foreach (var grid in MapManager.GetAllGrids())
+                var query = AllEntityQuery<MapGridComponent>();
+                while (query.MoveNext(out var uid, out var grid))
                 {
-                    if (!GridEmpty(grid)) continue;
-                    toDelete.Add(grid);
+                    if (!GridEmpty((uid, grid)))
+                        continue;
+                    toDelete.Add(uid);
                 }
 
-                foreach (var grid in toDelete)
+                foreach (var uid in toDelete)
                 {
-                    MapManager.DeleteGrid(grid.Owner);
+                    EntityManager.DeleteEntity(uid);
                 }
             }
         }
 
-        private bool GridEmpty(MapGridComponent grid)
+        private bool GridEmpty(Entity<MapGridComponent> entity)
         {
-            return !(grid.GetAllTiles().Any());
-        }
-
-        public override void Shutdown()
-        {
-            base.Shutdown();
-
-            _cfg.UnsubValueChanged(CVars.GameDeleteEmptyGrids, SetGridDeletion);
+            return !(GetAllTiles(entity, entity).Any());
         }
 
         private void HandleGridEmpty(EntityUid uid, MapGridComponent component, EmptyGridEvent args)
         {
-            if (!_deleteEmptyGrids) return;
-            if (!EntityManager.EntityExists(uid)) return;
-            if (EntityManager.GetComponent<MetaDataComponent>(uid).EntityLifeStage >= EntityLifeStage.Terminating) return;
+            if (!_deleteEmptyGrids || TerminatingOrDeleted(uid) || HasComp<MapComponent>(uid))
+                return;
 
-            MapManager.DeleteGrid(args.GridId);
+            EntityManager.DeleteEntity(args.GridId);
         }
     }
 }

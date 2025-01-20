@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Buffers;
+using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -13,6 +14,7 @@ using Robust.Shared.Log;
 using Robust.Shared.Serialization.Markdown;
 using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Serialization.Markdown.Value;
+using Robust.Shared.Timing;
 using Robust.Shared.Utility;
 using YamlDotNet.RepresentationModel;
 
@@ -28,7 +30,7 @@ namespace Robust.Shared.Serialization
             // All the mapped strings.
             // The dict is an array of indices into the array.
             private string[]? _mappedStrings;
-            private Dictionary<string, int>? _stringMapping;
+            private FrozenDictionary<string, int>? _stringMapping;
 
             // HashSet<string> of strings that we are currently building.
             // This should be added to in a thread-safe manner with TryAddString during building.
@@ -53,7 +55,7 @@ namespace Robust.Shared.Serialization
                 _stringMapping = GenMapDict(_mappedStrings);
             }
 
-            private static Dictionary<string, int> GenMapDict(string[] strings)
+            private FrozenDictionary<string, int> GenMapDict(string[] strings)
             {
                 var dict = new Dictionary<string, int>();
                 for (var i = 0; i < strings.Length; i++)
@@ -61,7 +63,10 @@ namespace Robust.Shared.Serialization
                     dict.Add(strings[i], i);
                 }
 
-                return dict;
+                var st = RStopwatch.StartNew();
+                var frozen = dict.ToFrozenDictionary();
+                _sawmill.Verbose($"Freezing mapped strings took {st.Elapsed.TotalMilliseconds:f2}ms");
+                return frozen;
             }
 
             public (byte[] mapHash, byte[] package) GeneratePackage()
@@ -131,14 +136,10 @@ namespace Robust.Shared.Serialization
 
                 foreach (var str in strings)
                 {
-                    DebugTools.Assert(str.Length < MaxMappedStringSize);
-
-                    if (Encoding.UTF8.GetByteCount(str) > MaxMappedStringSize)
-                    {
-                        // Ok so the code checks the goddamn string size before encoding to UTF-8 to check length.
-                        // Yes, this code sucks, but I don't care to fix it right now.
-                        continue;
-                    }
+                    // Ok so the code checks the goddamn string size before encoding to UTF-8 to check length.
+                    // Yes, this code sucks, but I don't care to fix it right now.
+                    if (str.Length > MaxMappedStringSize || Encoding.UTF8.GetByteCount(str) > MaxMappedStringSize)
+                        throw new Exception("Attempted to map a string that exceeds the maximum length.");
 
                     var l = Encoding.UTF8.GetBytes(str, buf);
 
@@ -178,10 +179,6 @@ namespace Robust.Shared.Serialization
             /// scoped names, this increases the likelyhood of a successful
             /// string mapping.
             /// </remarks>
-            /// <returns>
-            /// <c>true</c> if the string was added to the mapping for the first
-            /// time, <c>false</c> otherwise.
-            /// </returns>
             /// <exception cref="InvalidOperationException">
             /// Thrown if the string is not normalized (<see cref="String.IsNormalized()"/>).
             /// </exception>
@@ -262,8 +259,11 @@ namespace Robust.Shared.Serialization
                     {
                         for (var sl = 1; sl <= parts.Length - si; ++sl)
                         {
-                            var subSubStr = String.Concat(parts.Skip(si).Take(sl));
-                            AddString(subSubStr);
+                            // Don't ask me what the original was doing; we just skip by si and take sl
+                            // Can be reduced even further if you know what you're doin
+                            var end = si + sl;
+                            var subBetter = string.Concat(parts[si..^(parts.Length - end)]);
+                            AddString(subBetter);
                         }
                     }
                 }
@@ -400,6 +400,9 @@ namespace Robust.Shared.Serialization
 
             private bool TryAddString(string str)
             {
+                if (str.Length > MaxMappedStringSize || Encoding.UTF8.GetByteCount(str) > MaxMappedStringSize)
+                    return false;
+
                 // Yes this spends like half the CPU time of AddString in lock contention.
                 // But it's still faster than all my other attempts, so...
                 lock (_buildingStrings)

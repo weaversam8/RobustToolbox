@@ -22,9 +22,12 @@
 
 using System;
 using System.Collections.Generic;
+using System.Numerics;
+using System.Runtime.InteropServices;
 using Robust.Shared.Configuration;
 using Robust.Shared.IoC;
 using Robust.Shared.Maths;
+using Robust.Shared.Physics.Shapes;
 using Robust.Shared.Physics.Systems;
 using Robust.Shared.Serialization;
 using Robust.Shared.Serialization.Manager.Attributes;
@@ -35,7 +38,7 @@ namespace Robust.Shared.Physics.Collision.Shapes
 {
     [Serializable, NetSerializable]
     [DataDefinition]
-    public sealed class PolygonShape : IPhysShape, ISerializationHooks, IEquatable<PolygonShape>, IApproxEquatable<PolygonShape>
+    public sealed partial class PolygonShape : IPhysShape, ISerializationHooks, IEquatable<PolygonShape>, IApproxEquatable<PolygonShape>
     {
         // TODO: Serialize this someday. This probably needs a dedicated shapeserializer that derives vertexcount
         // from the yml nodes just for convenience.
@@ -53,25 +56,19 @@ namespace Robust.Shared.Physics.Collision.Shapes
         public Vector2[] Normals = Array.Empty<Vector2>();
 
         [ViewVariables, Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute, Other = AccessPermissions.Read)]
-        internal Vector2 Centroid { get; set; } = Vector2.Zero;
+        public Vector2 Centroid { get; internal set; } = Vector2.Zero;
 
         public int ChildCount => 1;
 
         /// <summary>
         /// The radius of this polygon.
         /// </summary>
-        [DataField("radius"), Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute, Other = AccessPermissions.Read)]
+        [DataField, Access(typeof(SharedPhysicsSystem), Friend = AccessPermissions.ReadWriteExecute, Other = AccessPermissions.Read)]
         public float Radius { get; set; } = PhysicsConstants.PolygonRadius;
 
         public bool Set(List<Vector2> vertices)
         {
-            Span<Vector2> verts = stackalloc Vector2[vertices.Count];
-
-            for (var i = 0; i < vertices.Count; i++)
-            {
-                verts[i] = vertices[i];
-            }
-
+            var verts = CollectionsMarshal.AsSpan(vertices);
             return Set(verts, vertices.Count);
         }
 
@@ -90,7 +87,7 @@ namespace Robust.Shared.Physics.Collision.Shapes
             return true;
         }
 
-        public void Set(PhysicsHull hull)
+        internal void Set(PhysicsHull hull)
         {
             DebugTools.Assert(hull.Count >= 3);
             var vertexCount = hull.Count;
@@ -107,10 +104,10 @@ namespace Robust.Shared.Physics.Collision.Shapes
             {
                 var next = i + 1 < vertexCount ? i + 1 : 0;
                 var edge = Vertices[next] - Vertices[i];
-                DebugTools.Assert(edge.LengthSquared > float.Epsilon * float.Epsilon);
+                DebugTools.Assert(edge.LengthSquared() > float.Epsilon * float.Epsilon);
 
-                var temp = Vector2.Cross(edge, 1f);
-                Normals[i] = temp.Normalized;
+                var temp = Vector2Helpers.Cross(edge, 1f);
+                Normals[i] = temp.Normalized();
             }
 
             Centroid = ComputeCentroid(Vertices, VertexCount);
@@ -155,7 +152,7 @@ namespace Robust.Shared.Physics.Collision.Shapes
                 var e1 = p2 - p1;
                 var e2 = p3 - p1;
 
-                float D = Vector2.Cross(e1, e2);
+                float D = Vector2Helpers.Cross(e1, e2);
 
                 float triangleArea = 0.5f * D;
                 area += triangleArea;
@@ -176,6 +173,13 @@ namespace Robust.Shared.Physics.Collision.Shapes
         {
         }
 
+        internal PolygonShape(Polygon poly)
+        {
+            Vertices = poly.Vertices;
+            Normals = poly.Normals;
+            Centroid = poly.Centroid;
+        }
+
         public PolygonShape(float radius)
         {
             Radius = radius;
@@ -185,6 +189,36 @@ namespace Robust.Shared.Physics.Collision.Shapes
         {
             // TODO: Someday don't need this.
             Set(Vertices.AsSpan(), VertexCount);
+        }
+
+        public void Set(Box2Rotated bounds)
+        {
+            Span<Vector2> verts = stackalloc Vector2[4];
+            verts[0] = bounds.BottomLeft;
+            verts[1] = bounds.BottomRight;
+            verts[2] = bounds.TopRight;
+            verts[3] = bounds.TopLeft;
+
+            var hull = new PhysicsHull(verts, 4);
+            Set(hull);
+        }
+
+        public void SetAsBox(Box2 box)
+        {
+            Array.Resize(ref Vertices, 4);
+            Array.Resize(ref Normals, 4);
+
+            Vertices[0] = box.BottomLeft;
+            Vertices[1] = box.BottomRight;
+            Vertices[2] = box.TopRight;
+            Vertices[3] = box.TopLeft;
+
+            Normals[0] = new Vector2(0.0f, -1.0f);
+            Normals[1] = new Vector2(1.0f, 0.0f);
+            Normals[2] = new Vector2(0.0f, 1.0f);
+            Normals[3] = new Vector2(-1.0f, 0.0f);
+
+            Centroid = box.Center;
         }
 
         public void SetAsBox(float halfWidth, float halfHeight)
@@ -273,8 +307,8 @@ namespace Robust.Shared.Physics.Collision.Shapes
             for (var i = 1; i < VertexCount; ++i)
             {
                 var v = Transform.Mul(transform, Vertices[i]);
-                lower = Vector2.ComponentMin(lower, v);
-                upper = Vector2.ComponentMax(upper, v);
+                lower = Vector2.Min(lower, v);
+                upper = Vector2.Max(upper, v);
             }
 
             var r = new Vector2(Radius, Radius);

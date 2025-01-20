@@ -1,4 +1,7 @@
-﻿using Robust.Shared.Map;
+﻿using System.Numerics;
+using Robust.Shared.GameObjects;
+using Robust.Shared.Map;
+using Robust.Shared.Map.Components;
 
 namespace Robust.Client.Placement.Modes
 {
@@ -12,27 +15,27 @@ namespace Robust.Client.Placement.Modes
         public override void AlignPlacementMode(ScreenCoordinates mouseScreen)
         {
             // Go over diagonal size so when placing in a line it doesn't stop snapping.
-            const float SearchBoxSize = 2f; // size of search box in meters
+            const float searchBoxSize = 2f; // size of search box in meters
 
-            MouseCoords = ScreenToCursorGrid(mouseScreen).AlignWithClosestGridTile(SearchBoxSize, pManager.EntityManager, pManager.MapManager);
+            MouseCoords = ScreenToCursorGrid(mouseScreen).AlignWithClosestGridTile(searchBoxSize, pManager.EntityManager, pManager.MapManager);
 
-            var gridId = MouseCoords.GetGridUid(pManager.EntityManager);
+            var gridId = pManager.EntityManager.System<SharedTransformSystem>().GetGrid(MouseCoords);
 
-            if (!pManager.MapManager.TryGetGrid(gridId, out var mapGrid))
+            if (!pManager.EntityManager.TryGetComponent<MapGridComponent>(gridId, out var mapGrid))
                 return;
 
-            CurrentTile = mapGrid.GetTileRef(MouseCoords);
+            CurrentTile = pManager.EntityManager.System<SharedMapSystem>().GetTileRef(gridId.Value, mapGrid, MouseCoords);
             float tileSize = mapGrid.TileSize; //convert from ushort to float
             GridDistancing = tileSize;
 
             if (pManager.CurrentPermission!.IsTile)
             {
-                MouseCoords = new EntityCoordinates(MouseCoords.EntityId, (CurrentTile.X + tileSize / 2,
+                MouseCoords = new EntityCoordinates(MouseCoords.EntityId, new Vector2(CurrentTile.X + tileSize / 2,
                     CurrentTile.Y + tileSize / 2));
             }
             else
             {
-                MouseCoords = new EntityCoordinates(MouseCoords.EntityId, (CurrentTile.X + tileSize / 2 + pManager.PlacementOffset.X,
+                MouseCoords = new EntityCoordinates(MouseCoords.EntityId, new Vector2(CurrentTile.X + tileSize / 2 + pManager.PlacementOffset.X,
                     CurrentTile.Y + tileSize / 2 + pManager.PlacementOffset.Y));
             }
         }

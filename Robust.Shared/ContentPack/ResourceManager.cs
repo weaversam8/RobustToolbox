@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using Robust.Shared.Configuration;
 using Robust.Shared.IoC;
+using Robust.Shared.Localization;
 using Robust.Shared.Log;
 using Robust.Shared.Utility;
 
@@ -14,9 +15,11 @@ namespace Robust.Shared.ContentPack
     /// <summary>
     ///     Virtual file system for all disk resources.
     /// </summary>
+    [Virtual]
     internal partial class ResourceManager : IResourceManagerInternal
     {
         [Dependency] private readonly IConfigurationManager _config = default!;
+        [Dependency] private readonly ILogManager _logManager = default!;
 
         private (ResPath prefix, IContentRoot root)[] _contentRoots =
             new (ResPath prefix, IContentRoot root)[0];
@@ -32,12 +35,16 @@ namespace Robust.Shared.ContentPack
         private static readonly Regex BadPathCharacterRegex =
             new("[<>:\"|?*\0\\x01-\\x1f]", RegexOptions.IgnoreCase);
 
+        protected ISawmill Sawmill = default!;
+
         /// <inheritdoc />
         public IWritableDirProvider UserData { get; private set; } = default!;
 
         /// <inheritdoc />
-        public void Initialize(string? userData)
+        public virtual void Initialize(string? userData)
         {
+            Sawmill = _logManager.GetSawmill("res");
+
             if (userData != null)
             {
                 UserData = new WritableDirProvider(Directory.CreateDirectory(userData));
@@ -60,7 +67,7 @@ namespace Robust.Shared.ContentPack
             // no pack in config
             if (string.IsNullOrWhiteSpace(zipPath))
             {
-                Logger.WarningS("res", "No default ContentPack to load in configuration.");
+                Sawmill.Warning("No default ContentPack to load in configuration.");
                 return;
             }
 
@@ -84,7 +91,7 @@ namespace Robust.Shared.ContentPack
 
             //create new PackLoader
 
-            var loader = new PackLoader(packInfo);
+            var loader = new PackLoader(packInfo, Sawmill);
             AddRoot(prefix.Value, loader);
         }
 
@@ -92,7 +99,7 @@ namespace Robust.Shared.ContentPack
         {
             prefix = SanitizePrefix(prefix);
 
-            var loader = new PackLoader(zipStream);
+            var loader = new PackLoader(zipStream, Sawmill);
             AddRoot(prefix.Value, loader);
         }
 
@@ -140,7 +147,7 @@ namespace Robust.Shared.ContentPack
                 throw new DirectoryNotFoundException("Specified directory does not exist: " + pathInfo.FullName);
             }
 
-            var loader = new DirLoader(pathInfo, Logger.GetSawmill("res"), _config.GetCVar(CVars.ResCheckPathCasing));
+            var loader = new DirLoader(pathInfo, _logManager.GetSawmill("res"), _config.GetCVar(CVars.ResCheckPathCasing));
             AddRoot(prefix.Value, loader);
         }
 
@@ -185,6 +192,14 @@ namespace Robust.Shared.ContentPack
                 throw new FileNotFoundException($"Path '{path}' contains invalid characters/filenames.");
             }
 #endif
+
+            if (path.Value.CanonPath.EndsWith(ResPath.Separator))
+            {
+                // This is a folder, not a file.
+                fileStream = null;
+                return false;
+            }
+
             foreach (var (prefix, root) in _contentRoots)
             {
                 if (!path.Value.TryRelativeTo(prefix, out var relative))
@@ -263,6 +278,10 @@ namespace Robust.Shared.ContentPack
             if (!path.IsRooted)
                 throw new ArgumentException("Path is not rooted", nameof(path));
 
+            // If we don't do this, TryRelativeTo won't work correctly.
+            if (!path.CanonPath.EndsWith("/"))
+                path = new ResPath(path.CanonPath + "/");
+
             var entries = new HashSet<string>();
 
             foreach (var (prefix, root) in _contentRoots)
@@ -273,6 +292,23 @@ namespace Robust.Shared.ContentPack
                 }
 
                 entries.UnionWith(root.GetEntries(relative.Value));
+            }
+
+            // We have to add mount points too.
+            // e.g. during development, /Assemblies/ is a mount point,
+            // and there's no explicit /Assemblies/ folder in Resources.
+            // So we need to manually add it since the previous pass won't catch it at all.
+            foreach (var (prefix, _) in _contentRoots)
+            {
+                if (!prefix.TryRelativeTo(path, out var relative))
+                    continue;
+
+                // Return first relative segment, unless it's literally just "." (identical path).
+                var segments = relative.Value.EnumerateSegments();
+                if (segments is ["."])
+                    continue;
+
+                entries.Add(segments[0] + "/");
             }
 
             return entries;

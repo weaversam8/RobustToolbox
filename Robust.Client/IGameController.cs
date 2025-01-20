@@ -25,6 +25,21 @@ public interface IGameController
     ///     controller will simply call <see cref="IEntityManager.TickUpdate(float, bool, Prometheus.Histogram?)"/>.
     ///     This exists to give content module more control over tick updating.
     /// </summary>
-    event Action<FrameEventArgs>? ContentEntityTickUpdate;
+    event Action<FrameEventArgs>? TickUpdateOverride;
+
+    /// <summary>
+    ///     Get the games Title, if Options.DefaultWindowTitle or if defaultWindowTitle is not set in the manifest.yml, it will default to RobustToolbox.
+    /// </summary>
+    string GameTitle();
+
+    /// <summary>
+    ///     Get the games Window Icon set, if Options.WindowIconSet or if windowIconSet is not set in the manifest.yml, it will default to an empty string.
+    /// </summary>
+    string WindowIconSet();
+
+    /// <summary>
+    ///     Get the games Splash Logo, if Options.SplashLogo or if splashLogo is not set in the manifest.yml, it will default to an empty string.
+    /// </summary>
+    string SplashLogo();
 }
 

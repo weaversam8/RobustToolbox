@@ -7,6 +7,8 @@ using Robust.Shared.Physics;
 using Robust.Shared.Physics.Systems;
 using System;
 using System.Collections.Generic;
+using Robust.Shared.Collections;
+using System.Numerics;
 using Robust.Shared.Map.Components;
 
 namespace Robust.Shared.ComponentTrees;
@@ -22,9 +24,11 @@ public abstract class ComponentTreeSystem<TTreeComp, TComp> : EntitySystem
     [Dependency] private readonly RecursiveMoveSystem _recursiveMoveSys = default!;
     [Dependency] protected readonly SharedTransformSystem XformSystem = default!;
     [Dependency] private readonly IMapManager _mapManager = default!;
+    [Dependency] private readonly SharedMapSystem _mapSystem = default!;
 
     private readonly Queue<ComponentTreeEntry<TComp>> _updateQueue = new();
     private readonly HashSet<EntityUid> _updated = new();
+    protected EntityQuery<TComp> Query;
 
     /// <summary>
     ///     If true, this system will update the tree positions every frame update. See also <see cref="DoTickUpdate"/>. Some systems may need to do both.
@@ -63,22 +67,38 @@ public abstract class ComponentTreeSystem<TTreeComp, TComp> : EntitySystem
 
         if (Recursive)
         {
-            SubscribeLocalEvent<TComp, TreeRecursiveMoveEvent>(HandleRecursiveMove);
+            _recursiveMoveSys.OnTreeRecursiveMove += HandleRecursiveMove;
             _recursiveMoveSys.AddSubscription();
         }
         else
         {
+            // TODO EXCEPTION TOLERANCE
+            // Ensure lookup trees update before content code handles move events.
             SubscribeLocalEvent<TComp, MoveEvent>(HandleMove);
         }
 
         SubscribeLocalEvent<TTreeComp, EntityTerminatingEvent>(OnTerminating);
         SubscribeLocalEvent<TTreeComp, ComponentAdd>(OnTreeAdd);
         SubscribeLocalEvent<TTreeComp, ComponentRemove>(OnTreeRemove);
+
+        Query = GetEntityQuery<TComp>();
+    }
+
+    public override void Shutdown()
+    {
+        if (Recursive)
+        {
+            _recursiveMoveSys.OnTreeRecursiveMove -= HandleRecursiveMove;
+        }
     }
 
     #region Queue Update
-    private void HandleRecursiveMove(EntityUid uid, TComp component, ref TreeRecursiveMoveEvent args)
-        => QueueTreeUpdate(uid, component, args.Xform);
+
+    private void HandleRecursiveMove(EntityUid uid, TransformComponent xform)
+    {
+        if (Query.TryGetComponent(uid, out var component))
+            QueueTreeUpdate(uid, component, xform);
+    }
 
     private void HandleMove(EntityUid uid, TComp component, ref MoveEvent args)
         => QueueTreeUpdate(uid, component, args.Component);
@@ -167,7 +187,10 @@ public abstract class ComponentTreeSystem<TTreeComp, TComp> : EntitySystem
             var (comp, xform) = entry;
 
             comp.TreeUpdateQueued = false;
-            if (!_updated.Add(comp.Owner))
+            if (!comp.Running)
+                continue;
+
+            if (!_updated.Add(entry.Uid))
                 continue;
 
             if (!comp.AddToTree || comp.Deleted || xform.MapUid == null)
@@ -238,32 +261,40 @@ public abstract class ComponentTreeSystem<TTreeComp, TComp> : EntitySystem
     #endregion
 
     #region Queries
-    public IEnumerable<TTreeComp> GetIntersectingTrees(MapId mapId, Box2Rotated worldBounds)
+    public IEnumerable<(EntityUid, TTreeComp)> GetIntersectingTrees(MapId mapId, Box2Rotated worldBounds)
         => GetIntersectingTrees(mapId, worldBounds.CalcBoundingBox());
 
-    public IEnumerable<TTreeComp> GetIntersectingTrees(MapId mapId, Box2 worldAABB)
+    public IEnumerable<(EntityUid Uid, TTreeComp Comp)> GetIntersectingTrees(MapId mapId, Box2 worldAABB)
     {
         // Anything that queries these trees should only do so if there are no queued updates, otherwise it can lead to
         // errors. Currently there is no easy way to enforce this, but this should work as long as nothing queries the
         // trees directly:
         UpdateTreePositions();
+        var trees = new ValueList<(EntityUid Uid, TTreeComp Comp)>();
 
-        if (mapId == MapId.Nullspace) yield break;
+        if (mapId == MapId.Nullspace)
+            return trees;
 
-        foreach (var grid in _mapManager.FindGridsIntersecting(mapId, worldAABB))
+        var state = (EntityManager, trees);
+
+        _mapManager.FindGridsIntersecting(mapId, worldAABB, ref state,
+            (EntityUid uid, MapGridComponent grid,
+                ref (EntityManager EntityManager, ValueList<(EntityUid, TTreeComp)> trees) tuple) =>
+            {
+                if (tuple.EntityManager.TryGetComponent<TTreeComp>(uid, out var treeComp))
+                {
+                    tuple.trees.Add((uid, treeComp));
+                }
+
+                return true;
+            }, includeMap: false);
+
+        if (_mapSystem.TryGetMap(mapId, out var mapUid) && TryComp(mapUid, out TTreeComp? mapTreeComp))
         {
-            if (TryComp(grid.Owner, out TTreeComp? treeComp))
-                yield return treeComp;
+            state.trees.Add((mapUid.Value, mapTreeComp));
         }
 
-        var mapUid = _mapManager.GetMapEntityId(mapId);
-
-        // Don't double-iterate
-        if (HasComp<MapGridComponent>(mapUid))
-            yield break;
-
-        if (TryComp(mapUid, out TTreeComp? mapTreeComp))
-            yield return mapTreeComp;
+        return state.trees;
     }
 
     public HashSet<ComponentTreeEntry<TComp>> QueryAabb(MapId mapId, Box2 worldBounds, bool approx = true)
@@ -272,9 +303,9 @@ public abstract class ComponentTreeSystem<TTreeComp, TComp> : EntitySystem
     public HashSet<ComponentTreeEntry<TComp>> QueryAabb(MapId mapId, Box2Rotated worldBounds, bool approx = true)
     {
         var state = new HashSet<ComponentTreeEntry<TComp>>();
-        foreach (var treeComp in GetIntersectingTrees(mapId, worldBounds))
+        foreach (var (tree, treeComp) in GetIntersectingTrees(mapId, worldBounds))
         {
-            var bounds = XformSystem.GetInvWorldMatrix(treeComp.Owner).TransformBox(worldBounds);
+            var bounds = XformSystem.GetInvWorldMatrix(tree).TransformBox(worldBounds);
 
             treeComp.Tree.QueryAabb(ref state, static (ref HashSet<ComponentTreeEntry<TComp>> state, in ComponentTreeEntry<TComp> value) =>
             {
@@ -303,9 +334,9 @@ public abstract class ComponentTreeSystem<TTreeComp, TComp> : EntitySystem
         Box2Rotated worldBounds,
         bool approx = true)
     {
-        foreach (var treeComp in GetIntersectingTrees(mapId, worldBounds))
+        foreach (var (tree, treeComp) in GetIntersectingTrees(mapId, worldBounds))
         {
-            var bounds = Transform(treeComp.Owner).InvWorldMatrix.TransformBox(worldBounds);
+            var bounds = XformSystem.GetInvWorldMatrix(tree).TransformBox(worldBounds);
             treeComp.Tree.QueryAabb(ref state, callback, bounds, approx);
         }
     }
@@ -319,15 +350,13 @@ public abstract class ComponentTreeSystem<TTreeComp, TComp> : EntitySystem
         var queryState = new QueryState<TState>(maxLength, returnOnFirstHit, state, predicate);
 
         var endPoint = ray.Position + ray.Direction * maxLength;
-        var worldBox = new Box2(Vector2.ComponentMin(ray.Position, endPoint), Vector2.ComponentMax(ray.Position, endPoint));
-        var xforms = GetEntityQuery<TransformComponent>();
+        var worldBox = new Box2(Vector2.Min(ray.Position, endPoint), Vector2.Max(ray.Position, endPoint));
 
-        foreach (var comp in GetIntersectingTrees(mapId, worldBox))
+        foreach (var (treeUid, comp) in GetIntersectingTrees(mapId, worldBox))
         {
-            var transform = xforms.GetComponent(comp.Owner);
-            var (_, treeRot, matrix) = transform.GetWorldPositionRotationInvMatrix(xforms);
+            var (_, treeRot, matrix) = XformSystem.GetWorldPositionRotationInvMatrix(treeUid);
             var relativeAngle = new Angle(-treeRot.Theta).RotateVec(ray.Direction);
-            var treeRay = new Ray(matrix.Transform(ray.Position), relativeAngle);
+            var treeRay = new Ray(Vector2.Transform(ray.Position, matrix), relativeAngle);
             comp.Tree.QueryRay(ref queryState, QueryCallback, treeRay);
             if (returnOnFirstHit && queryState.List.Count > 0)
                 break;

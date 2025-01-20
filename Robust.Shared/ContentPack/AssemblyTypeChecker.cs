@@ -56,10 +56,10 @@ namespace Robust.Shared.ContentPack
             // Config is huge and YAML is slow so config loading is delayed.
             // This means we can parallelize config loading with IL verification
             // (first time we need the config is when we print verifier errors).
-            _config = Task.Run(LoadConfig);
+            _config = Task.Run(() => LoadConfig(sawmill));
         }
 
-        private Resolver CreateResolver()
+        internal Resolver CreateResolver()
         {
             var dotnetDir = Path.GetDirectoryName(typeof(int).Assembly.Location)!;
             var ourPath = typeof(AssemblyTypeChecker).Assembly.Location;
@@ -71,11 +71,8 @@ namespace Robust.Shared.ContentPack
             }
             else
             {
-                _sawmill.Debug("Robust directory is {0}", ourPath);
                 loadDirs.Add(Path.GetDirectoryName(ourPath)!);
             }
-
-            _sawmill.Debug(".NET runtime directory is {0}", dotnetDir);
 
             if (EngineModuleDirectories != null)
             {
@@ -101,6 +98,19 @@ namespace Robust.Shared.ContentPack
         /// <returns></returns>
         public bool CheckAssembly(Stream assembly)
         {
+            using var resolver = CreateResolver();
+
+            return CheckAssembly(assembly, resolver);
+        }
+
+        /// <summary>
+        ///     Check the assembly for any illegal types. Any types not on the white list
+        ///     will cause the assembly to be rejected.
+        /// </summary>
+        /// <param name="assembly">Assembly to load.</param>
+        /// <returns></returns>
+        public bool CheckAssembly(Stream assembly, Resolver resolver)
+        {
             if (WouldNoOp)
             {
                 // This method is a no-op in this case so don't bother
@@ -110,8 +120,7 @@ namespace Robust.Shared.ContentPack
             _sawmill.Debug("Checking assembly...");
             var fullStopwatch = Stopwatch.StartNew();
 
-            var resolver = CreateResolver();
-            using var peReader = ModLoader.MakePEReader(assembly, leaveOpen: true);
+            using var peReader = ModLoader.MakePEReader(assembly, leaveOpen: true, PEStreamOptions.PrefetchEntireImage);
             var reader = peReader.GetMetadataReader();
 
             var asmName = reader.GetString(reader.GetAssemblyDefinition().Name);
@@ -139,7 +148,7 @@ namespace Robust.Shared.ContentPack
 
             if ((Dump & DumpFlags.Types) != 0)
             {
-                foreach (var mType in types)
+                foreach (var (_, mType) in types)
                 {
                     _sawmill.Debug($"RefType: {mType}");
                 }
@@ -147,7 +156,7 @@ namespace Robust.Shared.ContentPack
 
             if ((Dump & DumpFlags.Members) != 0)
             {
-                foreach (var memberRef in members)
+                foreach (var (_, memberRef) in members)
                 {
                     _sawmill.Debug($"RefMember: {memberRef}");
                 }
@@ -174,14 +183,17 @@ namespace Robust.Shared.ContentPack
             var loadedConfig = _config.Result;
 #pragma warning restore RA0004
 
+            var badRefs = new ConcurrentBag<EntityHandle>();
+
             // We still do explicit type reference scanning, even though the actual whitelists work with raw members.
             // This is so that we can simplify handling of generic type specifications during member checking:
             // we won't have to check that any types in their type arguments are whitelisted.
-            foreach (var type in types)
+            foreach (var (handle, type) in types)
             {
                 if (!IsTypeAccessAllowed(loadedConfig, type, out _))
                 {
                     errors.Add(new SandboxError($"Access to type not allowed: {type}"));
+                    badRefs.Add(handle);
                 }
             }
 
@@ -199,12 +211,19 @@ namespace Robust.Shared.ContentPack
 
             _sawmill.Debug($"Type abuse... {fullStopwatch.ElapsedMilliseconds}ms");
 
-            CheckMemberReferences(loadedConfig, members, errors);
+            CheckMemberReferences(loadedConfig, members, errors, badRefs);
 
             foreach (var error in errors)
             {
                 _sawmill.Error($"Sandbox violation: {error.Message}");
             }
+
+#if TOOLS
+            if (!badRefs.IsEmpty)
+            {
+                ReportBadReferences(peReader, reader, badRefs);
+            }
+#endif
 
             _sawmill.Debug($"Checked assembly in {fullStopwatch.ElapsedMilliseconds}ms");
 
@@ -225,7 +244,7 @@ namespace Robust.Shared.ContentPack
             Parallel.ForEach(partitioner.GetPartitions(Environment.ProcessorCount), handle =>
             {
                 var ver = new Verifier(resolver);
-                ver.SetSystemModuleName(new AssemblyName(SystemAssemblyName));
+                ver.SetSystemModuleName(new AssemblyNameInfo(SystemAssemblyName));
                 while (handle.MoveNext())
                 {
                     foreach (var result in ver.Verify(peReader, handle.Current, verifyMethods: true))
@@ -342,11 +361,13 @@ namespace Robust.Shared.ContentPack
 
         private void CheckMemberReferences(
             SandboxConfig sandboxConfig,
-            List<MMemberRef> members,
-            ConcurrentBag<SandboxError> errors)
+            List<(MemberReferenceHandle handle, MMemberRef parsed)> members,
+            ConcurrentBag<SandboxError> errors,
+            ConcurrentBag<EntityHandle> badReferences)
         {
-            Parallel.ForEach(members, memberRef =>
+            Parallel.ForEach(members, entry =>
             {
+                var (handle, memberRef) = entry;
                 MType baseType = memberRef.ParentType;
                 while (!(baseType is MTypeReferenced))
                 {
@@ -407,6 +428,7 @@ namespace Robust.Shared.ContentPack
                         }
 
                         errors.Add(new SandboxError($"Access to field not allowed: {mMemberRefField}"));
+                        badReferences.Add(handle);
                         break;
                     }
                     case MMemberRefMethod mMemberRefMethod:
@@ -435,6 +457,7 @@ namespace Robust.Shared.ContentPack
                         }
 
                         errors.Add(new SandboxError($"Access to method not allowed: {mMemberRefMethod}"));
+                        badReferences.Add(handle);
                         break;
                     default:
                         throw new ArgumentOutOfRangeException(nameof(memberRef));
@@ -449,18 +472,18 @@ namespace Robust.Shared.ContentPack
         {
             // This inheritance whitelisting primarily serves to avoid content doing funny stuff
             // by e.g. inheriting Type.
-            foreach (var (_, baseType, interfaces) in inherited)
+            foreach (var (type, baseType, interfaces) in inherited)
             {
                 if (!CanInherit(baseType))
                 {
-                    errors.Add(new SandboxError($"Inheriting of type not allowed: {baseType}"));
+                    errors.Add(new SandboxError($"Inheriting of type not allowed: {baseType} (by {type})"));
                 }
 
                 foreach (var @interface in interfaces)
                 {
                     if (!CanInherit(@interface))
                     {
-                        errors.Add(new SandboxError($"Implementing of interface not allowed: {@interface}"));
+                        errors.Add(new SandboxError($"Implementing of interface not allowed: {@interface} (by {type})"));
                     }
                 }
 
@@ -538,25 +561,25 @@ namespace Robust.Shared.ContentPack
             return nsDict.TryGetValue(type.Name, out cfg);
         }
 
-        private List<MTypeReferenced> GetReferencedTypes(MetadataReader reader, ConcurrentBag<SandboxError> errors)
+        private List<(TypeReferenceHandle handle, MTypeReferenced parsed)> GetReferencedTypes(MetadataReader reader, ConcurrentBag<SandboxError> errors)
         {
             return reader.TypeReferences.Select(typeRefHandle =>
                 {
                     try
                     {
-                        return ParseTypeReference(reader, typeRefHandle);
+                        return (typeRefHandle, ParseTypeReference(reader, typeRefHandle));
                     }
                     catch (UnsupportedMetadataException e)
                     {
                         errors.Add(new SandboxError(e));
-                        return null;
+                        return default;
                     }
                 })
-                .Where(p => p != null)
+                .Where(p => p.Item2 != null)
                 .ToList()!;
         }
 
-        private List<MMemberRef> GetReferencedMembers(MetadataReader reader, ConcurrentBag<SandboxError> errors)
+        private List<(MemberReferenceHandle handle, MMemberRef parsed)> GetReferencedMembers(MetadataReader reader, ConcurrentBag<SandboxError> errors)
         {
             return reader.MemberReferences.AsParallel()
                 .Select(memRefHandle =>
@@ -577,7 +600,7 @@ namespace Robust.Shared.ContentPack
                             catch (UnsupportedMetadataException u)
                             {
                                 errors.Add(new SandboxError(u));
-                                return null;
+                                return default;
                             }
 
                             break;
@@ -591,7 +614,7 @@ namespace Robust.Shared.ContentPack
                             catch (UnsupportedMetadataException u)
                             {
                                 errors.Add(new SandboxError(u));
-                                return null;
+                                return default;
                             }
 
                             break;
@@ -607,7 +630,7 @@ namespace Robust.Shared.ContentPack
                             {
                                 // Ensure this isn't a self-defined type.
                                 // This can happen due to generics since MethodSpec needs to point to MemberRef.
-                                return null;
+                                return default;
                             }
 
                             break;
@@ -616,18 +639,18 @@ namespace Robust.Shared.ContentPack
                         {
                             errors.Add(new SandboxError(
                                 $"Module global variables and methods are unsupported. Name: {memName}"));
-                            return null;
+                            return default;
                         }
                         case HandleKind.MethodDefinition:
                         {
                             errors.Add(new SandboxError($"Vararg calls are unsupported. Name: {memName}"));
-                            return null;
+                            return default;
                         }
                         default:
                         {
                             errors.Add(new SandboxError(
                                 $"Unsupported member ref parent type: {memRef.Parent.Kind}. Name: {memName}"));
-                            return null;
+                            return default;
                         }
                     }
 
@@ -658,9 +681,9 @@ namespace Robust.Shared.ContentPack
                             throw new ArgumentOutOfRangeException();
                     }
 
-                    return memberRef;
+                    return (memRefHandle, memberRef);
                 })
-                .Where(p => p != null)
+                .Where(p => p.memberRef != null)
                 .ToList()!;
         }
 
@@ -771,7 +794,6 @@ namespace Robust.Shared.ContentPack
             }
         }
 
-
         /// <exception href="UnsupportedMetadataException">
         ///     Thrown if the metadata does something funny we don't "support" like type forwarding.
         /// </exception>
@@ -856,7 +878,7 @@ namespace Robust.Shared.ContentPack
             return handle.IsNil ? null : reader.GetString(handle);
         }
 
-        private sealed class Resolver : IResolver
+        internal sealed class Resolver : IResolver, IDisposable
         {
             private readonly ConcurrentDictionary<string, PEReader?> _dictionary = new();
             private readonly AssemblyTypeChecker _parent;
@@ -883,12 +905,10 @@ namespace Robust.Shared.ContentPack
                 {
                     var path = Path.Combine(diskLoadPath, dllName);
 
-                    if (!File.Exists(path))
-                    {
+                    if (!FileHelper.TryOpenFileRead(path, out var fileStream))
                         continue;
-                    }
 
-                    return ModLoader.MakePEReader(File.OpenRead(path));
+                    return ModLoader.MakePEReader(fileStream);
                 }
 
                 foreach (var resLoadPath in _resLoadPaths)
@@ -906,9 +926,22 @@ namespace Robust.Shared.ContentPack
                 return null;
             }
 
-            public PEReader? Resolve(string simpleName)
+            public PEReader? ResolveAssembly(AssemblyNameInfo assemblyName)
             {
-                return _dictionary.GetOrAdd(simpleName, ResolveCore);
+                return _dictionary.GetOrAdd(assemblyName.Name!, ResolveCore);
+            }
+
+            public PEReader? ResolveModule(AssemblyNameInfo referencingAssembly, string fileName)
+            {
+                throw new NotSupportedException();
+            }
+
+            public void Dispose()
+            {
+                foreach (var reader in _dictionary.Values)
+                {
+                    reader?.Dispose();
+                }
             }
         }
 

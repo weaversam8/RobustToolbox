@@ -1,15 +1,15 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using Prometheus;
 using Robust.Client.GameStates;
 using Robust.Client.Player;
 using Robust.Client.Timing;
 using Robust.Shared.GameObjects;
 using Robust.Shared.IoC;
-using Robust.Shared.Log;
 using Robust.Shared.Network;
 using Robust.Shared.Network.Messages;
+using Robust.Shared.Player;
+using Robust.Shared.Replays;
 using Robust.Shared.Utility;
 
 namespace Robust.Client.GameObjects
@@ -17,15 +17,17 @@ namespace Robust.Client.GameObjects
     /// <summary>
     /// Manager for entities -- controls things like template loading and instantiation
     /// </summary>
-    public sealed class ClientEntityManager : EntityManager, IClientEntityManagerInternal
+    public sealed partial class ClientEntityManager : EntityManager, IClientEntityManagerInternal
     {
         [Dependency] private readonly IPlayerManager _playerManager = default!;
         [Dependency] private readonly IClientNetManager _networkManager = default!;
         [Dependency] private readonly IClientGameTiming _gameTiming = default!;
         [Dependency] private readonly IClientGameStateManager _stateMan = default!;
         [Dependency] private readonly IBaseClient _client = default!;
+        [Dependency] private readonly IReplayRecordingManager _replayRecording = default!;
 
-        protected override int NextEntityUid { get; set; } = EntityUid.ClientUid + 1;
+        internal event Action? AfterStartup;
+        internal event Action? AfterShutdown;
 
         public override void Initialize()
         {
@@ -35,25 +37,32 @@ namespace Robust.Client.GameObjects
             base.Initialize();
         }
 
+        public override void Startup()
+        {
+            base.Startup();
+
+            AfterStartup?.Invoke();
+        }
+
+        public override void Shutdown()
+        {
+            base.Shutdown();
+
+            AfterShutdown?.Invoke();
+        }
+
         public override void FlushEntities()
         {
+            // Server doesn't network deletions on client shutdown so we need to
+            // manually clear these out or risk stale data getting used.
+            PendingNetEntityStates.Clear();
             using var _ = _gameTiming.StartStateApplicationArea();
             base.FlushEntities();
         }
 
-        EntityUid IClientEntityManagerInternal.CreateEntity(string? prototypeName, EntityUid uid)
+        EntityUid IClientEntityManagerInternal.CreateEntity(string? prototypeName, out MetaDataComponent metadata)
         {
-            return base.CreateEntity(prototypeName, uid);
-        }
-
-        void IClientEntityManagerInternal.InitializeEntity(EntityUid entity, MetaDataComponent? meta)
-        {
-            base.InitializeEntity(entity, meta);
-        }
-
-        void IClientEntityManagerInternal.StartEntity(EntityUid entity)
-        {
-            base.StartEntity(entity);
+            return base.CreateEntity(prototypeName, out metadata);
         }
 
         /// <inheritdoc />
@@ -64,9 +73,12 @@ namespace Robust.Client.GameObjects
                 base.DirtyEntity(uid, meta);
         }
 
-        public override void QueueDeleteEntity(EntityUid uid)
+        public override void QueueDeleteEntity(EntityUid? uid)
         {
-            if (uid.IsClientSide())
+            if (uid == null || uid == EntityUid.Invalid)
+                return;
+
+            if (IsClientSide(uid.Value))
             {
                 base.QueueDeleteEntity(uid);
                 return;
@@ -77,38 +89,78 @@ namespace Robust.Client.GameObjects
 
             // Client-side entity deletion is not supported and will cause errors.
             if (_client.RunLevel == ClientRunLevel.Connected || _client.RunLevel == ClientRunLevel.InGame)
-                Logger.Error($"Predicting the queued deletion of a networked entity: {ToPrettyString(uid)}. Trace: {Environment.StackTrace}");
+                LogManager.RootSawmill.Error($"Predicting the queued deletion of a networked entity: {ToPrettyString(uid.Value)}. Trace: {Environment.StackTrace}");
         }
 
         /// <inheritdoc />
-        public override void Dirty(Component component, MetaDataComponent? meta = null)
+        public override void Dirty(EntityUid uid, IComponent component, MetaDataComponent? meta = null)
+        {
+            Dirty(new Entity<IComponent>(uid, component), meta);
+        }
+
+        /// <inheritdoc />
+        public override void Dirty<T>(Entity<T> ent, MetaDataComponent? meta = null)
         {
             //  Client only dirties during prediction
             if (_gameTiming.InPrediction)
-                base.Dirty(component, meta);
+                base.Dirty(ent, meta);
         }
 
-        public override EntityStringRepresentation ToPrettyString(EntityUid uid)
+        /// <inheritdoc />
+        public override void Dirty<T1, T2>(Entity<T1, T2> ent, MetaDataComponent? meta = null)
         {
-            if (_playerManager.LocalPlayer?.ControlledEntity == uid)
-                return base.ToPrettyString(uid) with { Session = _playerManager.LocalPlayer.Session };
-            else
-                return base.ToPrettyString(uid);
+            if (_gameTiming.InPrediction)
+                base.Dirty(ent, meta);
+        }
+
+        /// <inheritdoc />
+        public override void Dirty<T1, T2, T3>(Entity<T1, T2, T3> ent, MetaDataComponent? meta = null)
+        {
+            if (_gameTiming.InPrediction)
+                base.Dirty(ent, meta);
+        }
+
+        /// <inheritdoc />
+        public override void Dirty<T1, T2, T3, T4>(Entity<T1, T2, T3, T4> ent, MetaDataComponent? meta = null)
+        {
+            if (_gameTiming.InPrediction)
+                base.Dirty(ent, meta);
         }
 
         public override void RaisePredictiveEvent<T>(T msg)
         {
-            var localPlayer = _playerManager.LocalPlayer;
-            DebugTools.AssertNotNull(localPlayer);
+            var session = _playerManager.LocalSession;
+            DebugTools.AssertNotNull(session);
 
             var sequence = _stateMan.SystemMessageDispatched(msg);
             EntityNetManager?.SendSystemNetworkMessage(msg, sequence);
 
-            DebugTools.Assert(!_stateMan.IsPredictionEnabled || _gameTiming.InPrediction && _gameTiming.IsFirstTimePredicted || _client.RunLevel != ClientRunLevel.Connected);
+            if (!_stateMan.IsPredictionEnabled && _client.RunLevel != ClientRunLevel.SinglePlayerGame)
+                return;
 
-            var eventArgs = new EntitySessionEventArgs(localPlayer!.Session);
+            DebugTools.Assert(_gameTiming.InPrediction && _gameTiming.IsFirstTimePredicted || _client.RunLevel == ClientRunLevel.SinglePlayerGame);
+
+            var eventArgs = new EntitySessionEventArgs(session!);
             EventBus.RaiseEvent(EventSource.Local, msg);
             EventBus.RaiseEvent(EventSource.Local, new EntitySessionMessage<T>(eventArgs, msg));
+        }
+
+        /// <inheritdoc />
+        public override void RaiseSharedEvent<T>(T message, EntityUid? user = null)
+        {
+            if (user == null || user != _playerManager.LocalEntity || !_gameTiming.IsFirstTimePredicted)
+                return;
+
+            EventBus.RaiseEvent(EventSource.Local, ref message);
+        }
+
+        /// <inheritdoc />
+        public override void RaiseSharedEvent<T>(T message, ICommonSession? user = null)
+        {
+            if (user == null || user != _playerManager.LocalSession || !_gameTiming.IsFirstTimePredicted)
+                return;
+
+            EventBus.RaiseEvent(EventSource.Local, ref message);
         }
 
         #region IEntityNetworkManager impl
@@ -160,7 +212,7 @@ namespace Robust.Client.GameObjects
         }
 
         /// <inheritdoc />
-        public void SendSystemNetworkMessage(EntityEventArgs message, INetChannel channel)
+        public void SendSystemNetworkMessage(EntityEventArgs message, INetChannel? channel)
         {
             throw new NotSupportedException();
         }
@@ -184,6 +236,12 @@ namespace Robust.Client.GameObjects
             switch (message.Type)
             {
                 case EntityMessageType.SystemMessage:
+
+                    // TODO REPLAYS handle late messages.
+                    // If a message was received late, it will be recorded late here.
+                    // Maybe process the replay to prevent late messages when playing back?
+                    _replayRecording.RecordReplayMessage(message.SystemMessage);
+
                     DispatchReceivedNetworkMsg(message.SystemMessage);
                     return;
             }
@@ -192,7 +250,7 @@ namespace Robust.Client.GameObjects
         public void DispatchReceivedNetworkMsg(EntityEventArgs msg)
         {
             var sessionType = typeof(EntitySessionMessage<>).MakeGenericType(msg.GetType());
-            var sessionMsg = Activator.CreateInstance(sessionType, new EntitySessionEventArgs(_playerManager.LocalPlayer!.Session), msg)!;
+            var sessionMsg = Activator.CreateInstance(sessionType, new EntitySessionEventArgs(_playerManager.LocalSession!), msg)!;
             ReceivedSystemMessage?.Invoke(this, msg);
             ReceivedSystemMessage?.Invoke(this, sessionMsg);
         }

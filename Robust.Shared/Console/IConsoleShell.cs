@@ -1,4 +1,5 @@
-using Robust.Shared.Players;
+using Robust.Shared.Player;
+using Robust.Shared.Utility;
 
 namespace Robust.Shared.Console
 {
@@ -19,9 +20,9 @@ namespace Robust.Shared.Console
         bool IsClient => !IsServer;
 
         /// <summary>
-        /// Is the shell running in a local context (no remote peer session)? If true, <see cref="Player" /> will be null.
+        /// Is the shell running in a local context (no remote peer session)?.
         /// </summary>
-        bool IsLocal => Player is not null;
+        bool IsLocal { get; }
 
         /// <summary>
         /// Is the shell running on the server?
@@ -29,8 +30,13 @@ namespace Robust.Shared.Console
         bool IsServer { get; }
 
         /// <summary>
-        /// The remote peer that owns this shell. This is null if the shell is running local (<see cref="IsLocal" /> is true.).
+        /// The remote peer that owns this shell, or the local player if this is a local shell.
         /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This parameter is null for commands executed directly from the server console, as that has no player.
+        /// </para>
+        /// </remarks>
         ICommonSession? Player { get; }
 
         /// <summary>
@@ -53,6 +59,13 @@ namespace Robust.Shared.Console
         /// </summary>
         /// <param name="text">Line of text to write.</param>
         void WriteLine(string text);
+
+        void WriteLine(FormattedMessage message);
+
+        void WriteMarkup(string markup)
+        {
+            WriteLine(FormattedMessage.FromMarkupPermissive(markup));
+        }
 
         /// <summary>
         /// Write an error line to the console window.

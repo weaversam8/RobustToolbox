@@ -1,9 +1,15 @@
+using System.Numerics;
+using Robust.Shared.Graphics;
 using Robust.Shared.Maths;
 
 namespace Robust.Client.Graphics
 {
     public abstract class DrawingHandleWorld : DrawingHandleBase
     {
+        protected DrawingHandleWorld(Texture white) : base(white)
+        {
+        }
+
         private const int Ppm = EyeManager.PixelsPerMeter;
 
         /// <summary>
@@ -68,7 +74,7 @@ namespace Robust.Client.Graphics
         /// <remarks>
         /// The sprite will have it's local dimensions calculated so that it has <see cref="EyeManager.PixelsPerMeter"/> texels per meter in the world.
         /// </remarks>
-        public void DrawTexture(Texture texture, Vector2 position, Color? modulate = null)
+        public override void DrawTexture(Texture texture, Vector2 position, Color? modulate = null)
         {
             CheckDisposed();
 

@@ -1,6 +1,8 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Numerics;
 using Robust.Client.Graphics;
+using Robust.Shared.Graphics;
 using Robust.Shared.Maths;
 using static Robust.Client.UserInterface.Controls.BoxContainer;
 
@@ -10,7 +12,9 @@ namespace Robust.Client.UserInterface.Controls
     public class OptionButton : ContainerButton
     {
         public const string StyleClassOptionButton = "optionButton";
+        public const string StyleClassPopup = "optionButtonPopup";
         public const string StyleClassOptionTriangle = "optionTriangle";
+        public const string StyleClassOptionsBackground = "optionButtonBackground";
         public readonly ScrollContainer OptionsScroll;
 
         private readonly List<ButtonData> _buttonData = new();
@@ -72,7 +76,13 @@ namespace Robust.Client.UserInterface.Controls
 
             _popup = new Popup()
             {
-                Children = { OptionsScroll }
+                Children = {
+                    new PanelContainer {
+                        StyleClasses = { StyleClassOptionsBackground }
+                    },
+                    OptionsScroll
+                },
+                StyleClasses = { StyleClassPopup }
             };
             _popup.OnPopupHide += OnPopupHide;
 
@@ -95,6 +105,11 @@ namespace Robust.Client.UserInterface.Controls
         public void AddItem(Texture icon, string label, int? id = null)
         {
             AddItem(label, id);
+        }
+
+        public virtual void ButtonOverride(Button button)
+        {
+
         }
 
         public void AddItem(string label, int? id = null)
@@ -130,6 +145,8 @@ namespace Robust.Client.UserInterface.Controls
             {
                 Select(0);
             }
+
+            ButtonOverride(button);
         }
 
         private void TogglePopup(bool show)
@@ -137,9 +154,11 @@ namespace Robust.Client.UserInterface.Controls
             if (show)
             {
                 var globalPos = GlobalPosition;
-                OptionsScroll.Measure(Window?.Size ?? Vector2.Infinity);
+                globalPos.Y += Size.Y + 1; // Place it below us, with a safety margin.
+                globalPos.Y -= Margin.SumVertical;
+                OptionsScroll.Measure(Window?.Size ?? Vector2Helpers.Infinity);
                 var (minX, minY) = OptionsScroll.DesiredSize;
-                var box = UIBox2.FromDimensions(globalPos, (Math.Max(minX, Width), minY));
+                var box = UIBox2.FromDimensions(globalPos, new Vector2(Math.Max(minX, Width), minY));
                 UserInterfaceManager.ModalRoot.AddChild(_popup);
                 _popup.Open(box);
             }

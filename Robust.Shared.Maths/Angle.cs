@@ -1,4 +1,6 @@
 using System;
+using System.Numerics;
+using System.Runtime.CompilerServices;
 using JetBrains.Annotations;
 using Robust.Shared.Utility;
 
@@ -37,7 +39,7 @@ namespace Robust.Shared.Maths
         /// <param name="dir"></param>
         public Angle(Vector2 dir)
         {
-            dir = dir.Normalized;
+            dir = dir.Normalized();
             Theta = Math.Atan2(dir.Y, dir.X);
         }
 
@@ -257,7 +259,24 @@ namespace Robust.Shared.Maths
         /// <param name="degrees">The angle in degrees.</param>
         public static Angle FromDegrees(double degrees)
         {
-            return new(MathHelper.DegreesToRadians(degrees));
+            // Avoid rounding issues with common use cases.
+            switch (degrees)
+            {
+                case -270:
+                    return new Angle(Math.PI * -1.5);
+                case 90:
+                    return new Angle(Math.PI / 2);
+                case -180:
+                    return new Angle(-Math.PI);
+                case 180:
+                    return new Angle(Math.PI);
+                case 270.0:
+                    return new Angle(Math.PI * 1.5);
+                case -90:
+                    return new Angle(Math.PI / -2);
+                default:
+                    return new(MathHelper.DegreesToRadians(degrees));
+            }
         }
 
         /// <summary>

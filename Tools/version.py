@@ -11,7 +11,7 @@ from typing import List
 
 def main():
     parser = argparse.ArgumentParser(description = "Tool for versioning RobustToolbox: commits the version config update and sets your local tag.")
-    parser.add_argument("version", help = "Version that will be written to tag. Format: 0.x.x.x")
+    parser.add_argument("version", help = "Version that will be written to tag. Format: x.x.x")
     parser.add_argument("--file-only", action = "store_true", help = "Does not perform the Git part of the update (for writes only, not undos!)")
     parser.add_argument("--undo", action = "store_true", help = "Macro to rebase over last commit and remove version tag. Version still required.")
 
@@ -28,16 +28,13 @@ def main():
 
 
 def verify_version(version: str):
-    parts = version.split(".")
-    if len(parts) != 4:
-        print("Version must be split into four parts with '.'")
+    parts = version.split("-")[0].split(".")
+    if len(parts) != 3:
+        print("Version must be split into three parts with '.'")
         sys.exit(1)
     for v in parts:
         # this verifies parsability, exceptions here are expected for bad input
         int(v)
-    if int(parts[0]) != 0:
-        print("Major version must be 0")
-        sys.exit(1)
 
 def write_version(version: str, file_only: bool):
     # Writing operation
@@ -47,6 +44,10 @@ def write_version(version: str, file_only: bool):
 
     # Verify
     verify_version(version)
+
+    if tag_exists(version):
+        print(f"Version tag already exists: v{version}")
+        sys.exit(1)
 
     update_release_notes(version)
 
@@ -113,5 +114,9 @@ def undo_version(version: str):
     # *Outright eliminate the commit from the branch!* - Dangerous if we get rid of the wrong commit, hence backup
     subprocess.run(["git", "reset", "--keep", "HEAD^"], check=True)
     print("Done (deleted commit saved as " + savename + ")")
+
+def tag_exists(version: str):
+    result = subprocess.run(["git", "tag", "-l", "v" + version], stdout=subprocess.PIPE, encoding="utf-8")
+    return bool(result.stdout.strip())
 
 main()

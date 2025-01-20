@@ -1,18 +1,24 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Numerics;
 using JetBrains.Annotations;
 using Robust.Client.ComponentTrees;
 using Robust.Client.Graphics;
 using Robust.Client.ResourceManagement;
+using Robust.Client.Utility;
 using Robust.Shared;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
+using Robust.Shared.Graphics.RSI;
 using Robust.Shared.IoC;
+using Robust.Shared.Log;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
 using Robust.Shared.Physics;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Timing;
+using Robust.Shared.Utility;
 using static Robust.Client.GameObjects.SpriteComponent;
 
 namespace Robust.Client.GameObjects
@@ -24,9 +30,12 @@ namespace Robust.Client.GameObjects
     public sealed partial class SpriteSystem : EntitySystem
     {
         [Dependency] private readonly IConfigurationManager _cfg = default!;
+        [Dependency] private readonly IEyeManager _eye = default!;
         [Dependency] private readonly IGameTiming _timing = default!;
         [Dependency] private readonly IPrototypeManager _proto = default!;
         [Dependency] private readonly IResourceCache _resourceCache = default!;
+        [Dependency] private readonly ILogManager _logManager = default!;
+        [Dependency] private readonly SharedTransformSystem _xforms = default!;
 
         private readonly Queue<SpriteComponent> _inertUpdateQueue = new();
 
@@ -34,6 +43,8 @@ namespace Robust.Client.GameObjects
         ///     Entities that require a sprite frame update.
         /// </summary>
         private readonly HashSet<EntityUid> _queuedFrameUpdate = new();
+
+        private ISawmill _sawmill = default!;
 
         internal void Render(EntityUid uid, SpriteComponent sprite, DrawingHandleWorld drawingHandle, Angle eyeRotation, in Angle worldRotation, in Vector2 worldPosition)
         {
@@ -49,24 +60,23 @@ namespace Robust.Client.GameObjects
 
             UpdatesAfter.Add(typeof(SpriteTreeSystem));
 
-            _proto.PrototypesReloaded += OnPrototypesReloaded;
+            SubscribeLocalEvent<PrototypesReloadedEventArgs>(OnPrototypesReloaded);
             SubscribeLocalEvent<SpriteComponent, SpriteUpdateInertEvent>(QueueUpdateInert);
             SubscribeLocalEvent<SpriteComponent, ComponentInit>(OnInit);
 
-            _cfg.OnValueChanged(CVars.RenderSpriteDirectionBias, OnBiasChanged, true);
+            Subs.CVar(_cfg, CVars.RenderSpriteDirectionBias, OnBiasChanged, true);
+            _sawmill = _logManager.GetSawmill("sprite");
+        }
+
+        public bool IsVisible(Layer layer)
+        {
+            return layer.Visible && layer.CopyToShaderParameters == null;
         }
 
         private void OnInit(EntityUid uid, SpriteComponent component, ComponentInit args)
         {
             // I'm not 100% this is needed, but I CBF with this ATM. Somebody kill server sprite component please.
             QueueUpdateInert(uid, component);
-        }
-
-        public override void Shutdown()
-        {
-            base.Shutdown();
-            _proto.PrototypesReloaded -= OnPrototypesReloaded;
-            _cfg.UnsubValueChanged(CVars.RenderSpriteDirectionBias, OnBiasChanged);
         }
 
         private void OnBiasChanged(double value)
@@ -86,21 +96,53 @@ namespace Robust.Client.GameObjects
             _inertUpdateQueue.Enqueue(sprite);
         }
 
+        private void DoUpdateIsInert(SpriteComponent component)
+        {
+            component._inertUpdateQueued = false;
+            component.IsInert = true;
+
+            foreach (var layer in component.Layers)
+            {
+                // Since StateId is a struct, we can't null-check it directly.
+                if (!layer.State.IsValid || !layer.Visible || !layer.AutoAnimated || layer.Blank)
+                {
+                    continue;
+                }
+
+                var rsi = layer.RSI ?? component.BaseRSI;
+                if (rsi == null || !rsi.TryGetState(layer.State, out var state))
+                {
+                    state = GetFallbackState();
+                }
+
+                if (state.IsAnimated)
+                {
+                    component.IsInert = false;
+                    break;
+                }
+            }
+        }
+
         /// <inheritdoc />
         public override void FrameUpdate(float frameTime)
         {
             while (_inertUpdateQueue.TryDequeue(out var sprite))
             {
-                sprite.DoUpdateIsInert();
+                DoUpdateIsInert(sprite);
             }
 
             var realtime = _timing.RealTime.TotalSeconds;
             var spriteQuery = GetEntityQuery<SpriteComponent>();
             var syncQuery = GetEntityQuery<SyncSpriteComponent>();
+            var metaQuery = GetEntityQuery<MetaDataComponent>();
+
             foreach (var uid in _queuedFrameUpdate)
             {
-                if (!spriteQuery.TryGetComponent(uid, out var sprite))
+                if (!spriteQuery.TryGetComponent(uid, out var sprite) ||
+                    metaQuery.GetComponent(uid).EntityPaused)
+                {
                     continue;
+                }
 
                 if (sprite.IsInert)
                     continue;
@@ -144,6 +186,59 @@ namespace Robust.Client.GameObjects
         public void ForceUpdate(EntityUid uid)
         {
             _queuedFrameUpdate.Add(uid);
+        }
+
+        /// <summary>
+        /// Gets the specified frame for this sprite at the specified time.
+        /// </summary>
+        /// <param name="loop">Should we clamp on the last frame and not loop</param>
+        public Texture GetFrame(SpriteSpecifier spriteSpec, TimeSpan curTime, bool loop = true)
+        {
+            Texture? sprite = null;
+
+            switch (spriteSpec)
+            {
+                case SpriteSpecifier.Rsi rsi:
+                    var rsiActual = _resourceCache.GetResource<RSIResource>(rsi.RsiPath).RSI;
+                    rsiActual.TryGetState(rsi.RsiState, out var state);
+                    var frames = state!.GetFrames(RsiDirection.South);
+                    var delays = state.GetDelays();
+                    var totalDelay = delays.Sum();
+
+                    // No looping
+                    if (!loop && curTime.TotalSeconds >= totalDelay)
+                    {
+                        sprite = frames[^1];
+                    }
+                    // Loopable
+                    else
+                    {
+                        var time = curTime.TotalSeconds % totalDelay;
+                        var delaySum = 0f;
+
+                        for (var i = 0; i < delays.Length; i++)
+                        {
+                            var delay = delays[i];
+                            delaySum += delay;
+
+                            if (time > delaySum)
+                                continue;
+
+                            sprite = frames[i];
+                            break;
+                        }
+                    }
+
+                    sprite ??= Frame0(spriteSpec);
+                    break;
+                case SpriteSpecifier.Texture texture:
+                    sprite = texture.GetTexture(_resourceCache);
+                    break;
+                default:
+                    throw new NotImplementedException();
+            }
+
+            return sprite;
         }
     }
 

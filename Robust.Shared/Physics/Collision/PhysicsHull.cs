@@ -1,4 +1,6 @@
 using System;
+using System.Numerics;
+using System.Runtime.CompilerServices;
 using Robust.Shared.Maths;
 using Robust.Shared.Utility;
 
@@ -7,10 +9,16 @@ namespace Robust.Shared.Physics;
 /// <summary>
 /// Convex hull used for poly collision.
 /// </summary>
-public record struct PhysicsHull()
+internal ref struct PhysicsHull()
 {
-    public readonly Vector2[] Points = new Vector2[PhysicsConstants.MaxPolygonVertices];
+    public Span<Vector2> Points;
     public int Count;
+
+    public PhysicsHull(Span<Vector2> vertices, int count) : this()
+    {
+        Count = count;
+        Points = vertices[..count];
+    }
 
     private static PhysicsHull RecurseHull(Vector2 p1, Vector2 p2, Span<Vector2> ps, int count)
     {
@@ -27,11 +35,11 @@ public record struct PhysicsHull()
         e.Normalize();
 
         // discard points left of e and find point furthest to the right of e
-        var rightPoints = new Vector2[PhysicsConstants.MaxPolygonVertices];
+        Span<Vector2> rightPoints = stackalloc Vector2[PhysicsConstants.MaxPolygonVertices];
         var rightCount = 0;
 
         var bestIndex = 0;
-        float bestDistance = Vector2.Cross(ps[bestIndex] - p1, e);
+        float bestDistance = Vector2Helpers.Cross(ps[bestIndex] - p1, e);
         if (bestDistance > 0.0f)
         {
             rightPoints[rightCount++] = ps[bestIndex];
@@ -39,7 +47,7 @@ public record struct PhysicsHull()
 
         for (var i = 1; i < count; ++i)
         {
-            float distance = Vector2.Cross(ps[i] - p1, e);
+            float distance = Vector2Helpers.Cross(ps[i] - p1, e);
             if (distance > bestDistance)
             {
                 bestIndex = i;
@@ -57,6 +65,7 @@ public record struct PhysicsHull()
             return hull;
         }
 
+        hull.Points = new Vector2[PhysicsConstants.MaxPolygonVertices];
         var bestPoint = ps[bestIndex];
 
         // compute hull to the right of p1-bestPoint
@@ -92,7 +101,8 @@ public record struct PhysicsHull()
         PhysicsHull hull = new();
 
         if (count is < 3 or > PhysicsConstants.MaxPolygonVertices)
-	    {
+        {
+            hull.Count = 0;
             DebugTools.Assert(false);
 		    // check your data
 		    return hull;
@@ -109,8 +119,8 @@ public record struct PhysicsHull()
 	    const float tolSqr = 16.0f * PhysicsConstants.LinearSlop * PhysicsConstants.LinearSlop;
 	    for (var i = 0; i < count; ++i)
 	    {
-		    aabb.BottomLeft = Vector2.ComponentMin(aabb.BottomLeft, points[i]);
-		    aabb.TopRight = Vector2.ComponentMax(aabb.TopRight, points[i]);
+		    aabb.BottomLeft = Vector2.Min(aabb.BottomLeft, points[i]);
+		    aabb.TopRight = Vector2.Max(aabb.TopRight, points[i]);
 
 		    var vi = points[i];
 
@@ -119,7 +129,7 @@ public record struct PhysicsHull()
 		    {
 			    var vj = points[j];
 
-			    float distSqr = (vj - vi).LengthSquared;
+			    float distSqr = (vj - vi).LengthSquared();
 			    if (distSqr < tolSqr)
 			    {
 				    unique = false;
@@ -142,10 +152,10 @@ public record struct PhysicsHull()
 	    // Find an extreme point as the first point on the hull
 	    var c = aabb.Center;
 	    var i1 = 0;
-        float dsq1 = (ps[i1] - c).LengthSquared;
+        float dsq1 = (ps[i1] - c).LengthSquared();
 	    for (var i = 1; i < n; ++i)
         {
-            float dsq = (ps[i] - c).LengthSquared;
+            float dsq = (ps[i] - c).LengthSquared();
 		    if (dsq > dsq1)
 		    {
 			    i1 = i;
@@ -159,10 +169,10 @@ public record struct PhysicsHull()
 	    n = n - 1;
 
 	    var i2 = 0;
-        float dsq2 = (ps[i2] - p1).LengthSquared;
+        float dsq2 = (ps[i2] - p1).LengthSquared();
 	    for (var i = 1; i < n; ++i)
         {
-            float dsq = (ps[i] - p1).LengthSquared;
+            float dsq = (ps[i] - p1).LengthSquared();
 		    if (dsq > dsq2)
 		    {
 			    i2 = i;
@@ -187,7 +197,7 @@ public record struct PhysicsHull()
 
 	    for (var i = 0; i < n; ++i)
 	    {
-		    float d = Vector2.Cross(ps[i] - p1, e);
+		    float d = Vector2Helpers.Cross(ps[i] - p1, e);
 
 		    // slop used here to skip points that are very close to the line p1-p2
 		    if (d >= 2.0f * PhysicsConstants.LinearSlop)
@@ -205,10 +215,13 @@ public record struct PhysicsHull()
 	    var hull2 = RecurseHull(p2, p1, leftPoints, leftCount);
 
 	    if (hull1.Count == 0 && hull2.Count == 0)
-	    {
+        {
+            hull.Count = 0;
 		    // all points collinear
 		    return hull;
 	    }
+
+        hull.Points = new Vector2[PhysicsConstants.MaxPolygonVertices];
 
 	    // stitch hulls together, preserving CCW winding order
 	    hull.Points[hull.Count++] = p1;
@@ -247,7 +260,7 @@ public record struct PhysicsHull()
 			    e.Normalize();
 
 			    var v = p2 - p1;
-			    float distance = Vector2.Cross(p2 - p1, e);
+			    float distance = Vector2Helpers.Cross(p2 - p1, e);
 			    if (distance <= 2.0f * PhysicsConstants.LinearSlop)
 			    {
 				    // remove midpoint from hull
@@ -299,7 +312,7 @@ public record struct PhysicsHull()
                     continue;
                 }
 
-                float distance = Vector2.Cross(hull.Points[j] - p, e);
+                float distance = Vector2Helpers.Cross(hull.Points[j] - p, e);
                 if (distance >= 0.0f)
                 {
                     return false;
@@ -322,7 +335,7 @@ public record struct PhysicsHull()
             e.Normalize();
 
             var v = p2 - p1;
-            float distance = Vector2.Cross(p2 - p1, e);
+            float distance = Vector2Helpers.Cross(p2 - p1, e);
             if (distance <= PhysicsConstants.LinearSlop)
             {
                 // p1-p2-p3 are collinear

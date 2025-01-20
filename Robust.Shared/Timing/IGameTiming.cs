@@ -78,14 +78,15 @@ namespace Robust.Shared.Timing
         GameTick CurTick { get; set; }
 
         /// <summary>
-        ///     Timespan for the last tick.
+        ///     Time, relative to <see cref="RealTime"/>, the last tick started at.
+        ///     If we're currently in simulation, that's THIS tick.
         /// </summary>
         TimeSpan LastTick { get; set; }
 
         /// <summary>
         ///     The target ticks/second of the simulation.
         /// </summary>
-        byte TickRate { get; set; }
+        ushort TickRate { get; set; }
 
         /// <summary>
         /// The baseline time value that CurTime is calculated relatively to.
@@ -166,7 +167,7 @@ namespace Robust.Shared.Timing
         void ResetSimTime();
         void ResetSimTime((TimeSpan, GameTick) timeBase);
 
-        void SetTickRateAt( byte tickRate, GameTick atTick);
+        void SetTickRateAt(ushort tickRate, GameTick atTick);
 
         TimeSpan RealLocalToServer(TimeSpan local);
         TimeSpan RealServerToLocal(TimeSpan server);

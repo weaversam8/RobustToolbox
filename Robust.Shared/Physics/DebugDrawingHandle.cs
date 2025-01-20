@@ -1,4 +1,5 @@
-﻿using Robust.Shared.Maths;
+using System.Numerics;
+using Robust.Shared.Maths;
 
 namespace Robust.Shared.Physics
 {
@@ -14,7 +15,7 @@ namespace Robust.Shared.Physics
         public abstract void DrawPolygonShape(Vector2[] vertices, in Color color);
         public abstract void DrawLine(Vector2 start, Vector2 end, in Color color);
 
-        public abstract void SetTransform(in Matrix3 transform);
+        public abstract void SetTransform(in Matrix3x2 transform);
         public abstract Color CalcWakeColor(Color color, float wakePercent);
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics.Contracts;
+using System.Numerics;
 using Robust.Shared.Maths;
 
 namespace Robust.Client.UserInterface.Controls
@@ -18,6 +19,11 @@ namespace Robust.Client.UserInterface.Controls
         private readonly HScrollBar _hScrollBar;
 
         private bool _suppressScrollValueChanged;
+
+        /// <summary>
+        /// If true then if we have a y-axis scroll it will convert it to an x-axis scroll.
+        /// </summary>
+        public bool FallbackDeltaScroll { get; set; } = true;
 
         public int ScrollSpeedX { get; set; } = 50;
         public int ScrollSpeedY { get; set; } = 50;
@@ -49,13 +55,13 @@ namespace Robust.Client.UserInterface.Controls
             Action<Range> ev = _scrollValueChanged;
             _hScrollBar = new HScrollBar
             {
-                Visible = false,
+                Visible = _hScrollEnabled,
                 VerticalAlignment = VAlignment.Bottom,
                 HorizontalAlignment = HAlignment.Stretch
             };
             _vScrollBar = new VScrollBar
             {
-                Visible = false,
+                Visible = _vScrollEnabled,
                 VerticalAlignment = VAlignment.Stretch,
                 HorizontalAlignment = HAlignment.Right
             };
@@ -109,7 +115,7 @@ namespace Robust.Client.UserInterface.Controls
             foreach (var child in Children)
             {
                 child.Measure(constraint);
-                size = Vector2.ComponentMax(size, child.DesiredSize);
+                size = Vector2.Max(size, child.DesiredSize);
             }
 
             // Unlike WPF/Avalonia we default to reporting ZERO here instead of available size. This is to fix a bunch
@@ -117,10 +123,10 @@ namespace Robust.Client.UserInterface.Controls
             if (!ReturnMeasure)
                 return Vector2.Zero;
 
-            if (_vScrollEnabled)
+            if (_vScrollEnabled && size.Y >= availableSize.Y)
                 size.X += _vScrollBar.DesiredSize.X;
 
-            if (_hScrollEnabled)
+            if (_hScrollEnabled && size.X >= availableSize.X)
                 size.Y += _hScrollBar.DesiredSize.Y;
 
             return size;
@@ -143,7 +149,7 @@ namespace Robust.Client.UserInterface.Controls
                     continue;
                 }
 
-                maxChildMinSize = Vector2.ComponentMax(child.DesiredSize, maxChildMinSize);
+                maxChildMinSize = Vector2.Max(child.DesiredSize, maxChildMinSize);
             }
 
             var (cWidth, cHeight) = maxChildMinSize;
@@ -205,7 +211,7 @@ namespace Robust.Client.UserInterface.Controls
                 _hScrollBar.Arrange(UIBox2.FromDimensions(Vector2.Zero, finalSize));
             }
 
-            var realFinalSize = (
+            var realFinalSize = new Vector2(
                 _hScrollEnabled ? Math.Max(cWidth, sWidth) : sWidth,
                 _vScrollEnabled ? Math.Max(cHeight, sHeight) : sHeight);
 
@@ -245,8 +251,18 @@ namespace Robust.Client.UserInterface.Controls
 
             if (_hScrollEnabled)
             {
-                _hScrollBar.ValueTarget += args.Delta.X * ScrollSpeedX;
+                var delta =
+                    args.Delta.X == 0f &&
+                    !_vScrollEnabled &&
+                    FallbackDeltaScroll ?
+                        -args.Delta.Y :
+                        args.Delta.X;
+
+                _hScrollBar.ValueTarget += delta * ScrollSpeedX;
             }
+
+            if (!_vScrollVisible && !_hScrollVisible)
+                return;
 
             args.Handle();
         }
@@ -269,7 +285,7 @@ namespace Robust.Client.UserInterface.Controls
         public Vector2 GetScrollValue(bool ignoreVisible = false)
         {
             if (ignoreVisible)
-                return (_hScrollBar.Value, _vScrollBar.Value);
+                return new(_hScrollBar.Value, _vScrollBar.Value);
 
             var h = _hScrollBar.Value;
             var v = _vScrollBar.Value;

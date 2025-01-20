@@ -26,6 +26,11 @@ namespace Robust.Shared.ContentPack
         bool TryGetFile(ResPath relPath, [NotNullWhen(true)] out Stream? stream);
 
         /// <summary>
+        ///     Returns true if the given file exists.
+        /// </summary>
+        public bool FileExists(ResPath relPath);
+
+        /// <summary>
         ///     Recursively finds all files in a directory and all sub directories.
         /// </summary>
         /// <param name="path">Directory to search inside of.</param>
@@ -44,7 +49,7 @@ namespace Robust.Shared.ContentPack
 
             var options = FindFiles(path).Select(c =>
             {
-                var segment = path.CanonPath.Split('/');
+                var segment = c.CanonPath.Split('/');
                 var segCount = segment.Count();
                 var newPath = segment.Skip(countDirs).First();
                 if (segCount > countDirs + 1)

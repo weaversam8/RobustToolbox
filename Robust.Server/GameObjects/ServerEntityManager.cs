@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using JetBrains.Annotations;
 using Prometheus;
+using Robust.Server.GameStates;
 using Robust.Server.Player;
 using Robust.Shared;
 using Robust.Shared.Configuration;
@@ -14,6 +15,7 @@ using Robust.Shared.IoC;
 using Robust.Shared.Log;
 using Robust.Shared.Network;
 using Robust.Shared.Network.Messages;
+using Robust.Shared.Player;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Replays;
 using Robust.Shared.Timing;
@@ -40,19 +42,28 @@ namespace Robust.Server.GameObjects
         [Dependency] private readonly IRuntimeLog _runtimeLog = default!;
 #endif
 
-        protected override int NextEntityUid { get; set; } = (int) EntityUid.FirstUid;
+        private ISawmill _netEntSawmill = default!;
+        private PvsSystem _pvs = default!;
 
         public override void Initialize()
         {
+            _netEntSawmill = LogManager.GetSawmill("net.ent");
+
             SetupNetworking();
             ReceivedSystemMessage += (_, systemMsg) => EventBus.RaiseEvent(EventSource.Network, systemMsg);
 
             base.Initialize();
         }
 
-        EntityUid IServerEntityManagerInternal.AllocEntity(string? prototypeName, EntityUid uid)
+        public override void Startup()
         {
-            return AllocEntity(prototypeName, out _, uid);
+            base.Startup();
+            _pvs = System<PvsSystem>();
+        }
+
+        EntityUid IServerEntityManagerInternal.AllocEntity(EntityPrototype? prototype)
+        {
+            return AllocEntity(prototype, out _);
         }
 
         void IServerEntityManagerInternal.FinishEntityLoad(EntityUid entity, IEntityLoadContext? context)
@@ -70,42 +81,81 @@ namespace Robust.Server.GameObjects
             InitializeEntity(entity, meta);
         }
 
+        [Obsolete("Use StartEntity")]
         void IServerEntityManagerInternal.FinishEntityStartup(EntityUid entity)
         {
             StartEntity(entity);
         }
 
-        private protected override EntityUid CreateEntity(string? prototypeName, EntityUid uid = default)
+        internal override EntityUid CreateEntity(string? prototypeName, out MetaDataComponent metadata, IEntityLoadContext? context = null)
         {
-            var entity = base.CreateEntity(prototypeName, uid);
+            if (prototypeName == null)
+                return base.CreateEntity(prototypeName, out metadata, context);
 
-            if (!string.IsNullOrWhiteSpace(prototypeName))
-            {
-                var prototype = PrototypeManager.Index<EntityPrototype>(prototypeName);
+            if (!PrototypeManager.TryIndex<EntityPrototype>(prototypeName, out var prototype))
+                throw new EntityCreationException($"Attempted to spawn an entity with an invalid prototype: {prototypeName}");
 
-                // At this point in time, all data configure on the entity *should* be purely from the prototype.
-                // As such, we can reset the modified ticks to Zero,
-                // which indicates "not different from client's own deserialization".
-                // So the initial data for the component or even the creation doesn't have to be sent over the wire.
-                foreach (var (netId, component) in GetNetComponents(entity))
-                {
-                    // Make sure to ONLY get components that are defined in the prototype.
-                    // Others could be instantiated directly by AddComponent (e.g. ContainerManager).
-                    // And those aren't guaranteed to exist on the client, so don't clear them.
-                    var compName = ComponentFactory.GetComponentName(component.GetType());
-                    if (prototype.Components.ContainsKey(compName))
-                        component.ClearTicks();
-                }
-            }
+            var entity = base.CreateEntity(prototype, out metadata, context);
 
+            // At this point in time, all data configure on the entity *should* be purely from the prototype.
+            // As such, we can reset the modified ticks to Zero,
+            // which indicates "not different from client's own deserialization".
+            // So the initial data for the component or even the creation doesn't have to be sent over the wire.
+            ClearTicks(entity, prototype);
             return entity;
         }
 
-        public override EntityStringRepresentation ToPrettyString(EntityUid uid)
+        /// <inheritdoc />
+        public override void RaiseSharedEvent<T>(T message, EntityUid? user = null)
         {
-            TryGetComponent(uid, out ActorComponent? actor);
+            if (user != null)
+            {
+                var filter = Filter.Broadcast().RemoveWhereAttachedEntity(e => e == user.Value);
+                foreach (var session in filter.Recipients)
+                {
+                    EntityNetManager.SendSystemNetworkMessage(message, session.Channel);
+                }
+            }
+            else
+            {
+                EntityNetManager.SendSystemNetworkMessage(message);
+            }
+        }
 
-            return base.ToPrettyString(uid) with { Session = actor?.PlayerSession };
+        /// <inheritdoc />
+        public override void RaiseSharedEvent<T>(T message, ICommonSession? user = null)
+        {
+            if (user != null)
+            {
+                var filter = Filter.Broadcast().RemovePlayer(user);
+                foreach (var session in filter.Recipients)
+                {
+                    EntityNetManager.SendSystemNetworkMessage(message, session.Channel);
+                }
+            }
+            else
+            {
+                EntityNetManager.SendSystemNetworkMessage(message);
+            }
+        }
+
+        private void ClearTicks(EntityUid entity, EntityPrototype prototype)
+        {
+            foreach (var (netId, component) in GetNetComponents(entity))
+            {
+                // Make sure to ONLY get components that are defined in the prototype.
+                // Others could be instantiated directly by AddComponent (e.g. ContainerManager).
+                // And those aren't guaranteed to exist on the client, so don't clear them.
+                var compName = ComponentFactory.GetComponentName(netId);
+                if (prototype.Components.ContainsKey(compName))
+                    component.ClearTicks();
+            }
+        }
+
+        internal override void SetLifeStage(MetaDataComponent meta, EntityLifeStage stage)
+        {
+            base.SetLifeStage(meta, stage);
+            _pvs.SyncMetadata(meta);
         }
 
         #region IEntityNetworkManager impl
@@ -117,7 +167,7 @@ namespace Robust.Server.GameObjects
 
         private readonly PriorityQueue<MsgEntity> _queue = new(new MessageSequenceComparer());
 
-        private readonly Dictionary<IPlayerSession, uint> _lastProcessedSequencesCmd =
+        private readonly Dictionary<ICommonSession, uint> _lastProcessedSequencesCmd =
             new();
 
         private bool _logLateMsgs;
@@ -126,9 +176,6 @@ namespace Robust.Server.GameObjects
         public void SetupNetworking()
         {
             _networkManager.RegisterNetMessage<MsgEntity>(HandleEntityNetworkMessage);
-
-            // For syncing component deletions.
-            ComponentRemoved += OnComponentRemoved;
 
             _playerManager.PlayerStatusChanged += OnPlayerStatusChanged;
 
@@ -151,18 +198,9 @@ namespace Robust.Server.GameObjects
             EntitiesCount.Set(Entities.Count);
         }
 
-        public uint GetLastMessageSequence(IPlayerSession session)
+        public uint GetLastMessageSequence(ICommonSession? session)
         {
-            return _lastProcessedSequencesCmd[session];
-        }
-
-        private void OnComponentRemoved(RemovedComponentEventArgs e)
-        {
-            if (e.Terminating || !e.BaseArgs.Component.NetSyncEnabled)
-                return;
-
-            if (TryGetComponent(e.BaseArgs.Owner, out MetaDataComponent? meta))
-                meta.LastComponentRemoved = _gameTiming.CurTick;
+            return session == null ? default : _lastProcessedSequencesCmd.GetValueOrDefault(session);
         }
 
         /// <inheritdoc />
@@ -174,7 +212,7 @@ namespace Robust.Server.GameObjects
             newMsg.SourceTick = _gameTiming.CurTick;
 
             if (recordReplay)
-                _replay.QueueReplayMessage(message);
+                _replay.RecordServerMessage(message);
 
             _networkManager.ServerSendToAll(newMsg);
         }
@@ -192,21 +230,6 @@ namespace Robust.Server.GameObjects
 
         private void HandleEntityNetworkMessage(MsgEntity message)
         {
-            var msgT = message.SourceTick;
-            var cT = _gameTiming.CurTick;
-
-            if (msgT <= cT)
-            {
-                if (msgT < cT && _logLateMsgs)
-                {
-                    Logger.WarningS("net.ent", "Got late MsgEntity! Diff: {0}, msgT: {2}, cT: {3}, player: {1}",
-                        (int) msgT.Value - (int) cT.Value, message.MsgChannel.UserName, msgT, cT);
-                }
-
-                DispatchEntityNetworkMessage(message);
-                return;
-            }
-
             _queue.Add(message);
         }
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using Robust.Shared.Maths;
 using NUnit.Framework;
 
@@ -25,6 +26,14 @@ namespace Robust.UnitTesting.Shared.Maths
 
             (0.92387953251128674f, -0.38268343236508978f, Direction.East, -System.Math.PI / 8.0)
         };
+
+        [Test]
+        public void TestAngleDegrees()
+        {
+            const double degrees = 75d;
+            var angle = Angle.FromDegrees(degrees);
+            Assert.That(angle.Degrees, Is.EqualTo(degrees));
+        }
 
         [Test]
         public void TestAngleZero()
@@ -118,7 +127,7 @@ namespace Robust.UnitTesting.Shared.Maths
         [Sequential]
         public void TestAngleToVector2([ValueSource(nameof(Sources))] (float, float, Direction, double) test)
         {
-            var control = new Vector2(test.Item1, test.Item2).Normalized;
+            var control = new Vector2(test.Item1, test.Item2).Normalized();
             var target = new Angle(test.Item4);
 
             Assert.That((control - target.ToVec()).LengthSquared, Is.AtMost(Epsilon));

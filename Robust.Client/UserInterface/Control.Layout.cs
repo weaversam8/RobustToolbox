@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 using Robust.Client.Graphics;
 using Robust.Client.UserInterface.Controls;
 using Robust.Shared.Map;
@@ -11,26 +12,33 @@ namespace Robust.Client.UserInterface
 
     public partial class Control
     {
+        private const float DefaultStretchRatio = 1;
+        private const float DefaultSetSize = float.NaN;
+        private const float DefaultMaxSize = float.PositiveInfinity;
+        private const HAlignment DefaultHAlignment = HAlignment.Stretch;
+        private const VAlignment DefaultVAlignment = VAlignment.Stretch;
+
         private Vector2 _size;
 
         [ViewVariables] internal Vector2? PreviousMeasure;
         [ViewVariables] internal UIBox2? PreviousArrange;
 
-        private float _sizeFlagsStretchRatio = 1;
+        private float _sizeFlagsStretchRatio = DefaultStretchRatio;
 
         private float _minWidth;
         private float _minHeight;
-        private float _setWidth = float.NaN;
-        private float _setHeight = float.NaN;
-        private float _maxWidth = float.PositiveInfinity;
-        private float _maxHeight = float.PositiveInfinity;
+        private float _setWidth = DefaultSetSize;
+        private float _setHeight = DefaultSetSize;
+        private float _maxWidth = DefaultMaxSize;
+        private float _maxHeight = DefaultMaxSize;
 
         private bool _horizontalExpand;
         private bool _verticalExpand;
-        private HAlignment _horizontalAlignment = HAlignment.Stretch;
-        private VAlignment _verticalAlignment = VAlignment.Stretch;
+        private HAlignment _horizontalAlignment = DefaultHAlignment;
+        private VAlignment _verticalAlignment = DefaultVAlignment;
         private Thickness _margin;
         private bool _measuring;
+        private bool _arranging;
 
         /// <summary>
         /// The desired minimum size this control needs for layout to avoid cutting off content or such.
@@ -44,6 +52,10 @@ namespace Robust.Client.UserInterface
         [ViewVariables] public bool IsMeasureValid { get; private set; }
         [ViewVariables] public bool IsArrangeValid { get; private set; }
 
+        /// <summary>
+        /// Controls the amount of empty space in virtual pixels around the control.
+        /// </summary>
+        /// <remarks>Values can be provided as "All" or "Horizontal, Vertical" or "Left, Top, Right, Bottom"</remarks>
         [ViewVariables]
         public Thickness Margin
         {
@@ -51,6 +63,7 @@ namespace Robust.Client.UserInterface
             set
             {
                 _margin = value;
+                SetLayoutStyleProp(LayoutStyleProperties.Margin);
                 InvalidateMeasure();
             }
         }
@@ -224,6 +237,10 @@ namespace Robust.Client.UserInterface
         /// <seealso cref="Rect"/>
         public UIBox2i PixelRect => UIBox2i.FromDimensions(PixelPosition, PixelSize);
 
+        public UIBox2 GlobalRect => UIBox2.FromDimensions(GlobalPosition, _size);
+
+        public UIBox2i GlobalPixelRect => UIBox2i.FromDimensions(GlobalPixelPosition, PixelSize);
+
         /// <summary>
         /// Horizontal alignment mode.
         /// This determines how the control should be laid out horizontally
@@ -236,6 +253,7 @@ namespace Robust.Client.UserInterface
             set
             {
                 _horizontalAlignment = value;
+                SetLayoutStyleProp(LayoutStyleProperties.HorizontalAlignment);
                 InvalidateArrange();
             }
         }
@@ -252,6 +270,7 @@ namespace Robust.Client.UserInterface
             set
             {
                 _verticalAlignment = value;
+                SetLayoutStyleProp(LayoutStyleProperties.VerticalAlignment);
                 InvalidateArrange();
             }
         }
@@ -270,6 +289,7 @@ namespace Robust.Client.UserInterface
             set
             {
                 _horizontalExpand = value;
+                SetLayoutStyleProp(LayoutStyleProperties.HorizontalExpand);
                 Parent?.InvalidateMeasure();
             }
         }
@@ -288,6 +308,7 @@ namespace Robust.Client.UserInterface
             set
             {
                 _verticalExpand = value;
+                SetLayoutStyleProp(LayoutStyleProperties.VerticalExpand);
                 Parent?.InvalidateArrange();
             }
         }
@@ -312,6 +333,7 @@ namespace Robust.Client.UserInterface
 
                 _sizeFlagsStretchRatio = value;
 
+                SetLayoutStyleProp(LayoutStyleProperties.StretchRatio);
                 Parent?.InvalidateArrange();
             }
         }
@@ -335,8 +357,8 @@ namespace Robust.Client.UserInterface
         /// <seealso cref="MinHeight"/>
         public Vector2 MinSize
         {
-            get => (_minWidth, _minHeight);
-            set => (MinWidth, MinHeight) = Vector2.ComponentMax(Vector2.Zero, value);
+            get => new(_minWidth, _minHeight);
+            set => (MinWidth, MinHeight) = Vector2.Max(Vector2.Zero, value);
         }
 
         /// <summary>
@@ -358,7 +380,7 @@ namespace Robust.Client.UserInterface
         /// <seealso cref="SetHeight"/>
         public Vector2 SetSize
         {
-            get => (_setWidth, _setHeight);
+            get => new(_setWidth, _setHeight);
             set => (SetWidth, SetHeight) = value;
         }
 
@@ -374,7 +396,7 @@ namespace Robust.Client.UserInterface
         /// <seealso cref="MaxHeight"/>
         public Vector2 MaxSize
         {
-            get => (_maxWidth, _maxHeight);
+            get => new(_maxWidth, _maxHeight);
             set => (MaxWidth, MaxHeight) = value;
         }
 
@@ -388,6 +410,7 @@ namespace Robust.Client.UserInterface
             set
             {
                 _minWidth = value;
+                SetLayoutStyleProp(LayoutStyleProperties.MinWidth);
                 InvalidateMeasure();
             }
         }
@@ -402,6 +425,7 @@ namespace Robust.Client.UserInterface
             set
             {
                 _minHeight = value;
+                SetLayoutStyleProp(LayoutStyleProperties.MinHeight);
                 InvalidateMeasure();
             }
         }
@@ -416,6 +440,7 @@ namespace Robust.Client.UserInterface
             set
             {
                 _setWidth = value;
+                SetLayoutStyleProp(LayoutStyleProperties.SetWidth);
                 InvalidateMeasure();
             }
         }
@@ -430,6 +455,7 @@ namespace Robust.Client.UserInterface
             set
             {
                 _setHeight = value;
+                SetLayoutStyleProp(LayoutStyleProperties.SetHeight);
                 InvalidateMeasure();
             }
         }
@@ -444,6 +470,7 @@ namespace Robust.Client.UserInterface
             set
             {
                 _maxWidth = value;
+                SetLayoutStyleProp(LayoutStyleProperties.MaxWidth);
                 InvalidateMeasure();
             }
         }
@@ -458,8 +485,17 @@ namespace Robust.Client.UserInterface
             set
             {
                 _maxHeight = value;
+                SetLayoutStyleProp(LayoutStyleProperties.MaxHeight);
                 InvalidateMeasure();
             }
+        }
+
+        /// <summary>
+        /// Gets the screen coordinates position relative to the control.
+        /// </summary>
+        public Vector2 GetLocalPosition(ScreenCoordinates coordinates)
+        {
+            return coordinates.Position - GlobalPixelPosition;
         }
 
         /// <summary>
@@ -468,13 +504,12 @@ namespace Robust.Client.UserInterface
         /// </summary>
         public void InvalidateMeasure()
         {
-            if (!IsMeasureValid)
+            if (!IsMeasureValid || _measuring)
                 return;
 
             IsMeasureValid = false;
-            IsArrangeValid = false;
-
             UserInterfaceManagerInternal.QueueMeasureUpdate(this);
+            InvalidateArrange();
         }
 
         /// <summary>
@@ -483,7 +518,7 @@ namespace Robust.Client.UserInterface
         /// </summary>
         public void InvalidateArrange()
         {
-            if (!IsArrangeValid)
+            if (!IsArrangeValid || _arranging)
             {
                 // Already queued for a layout update, don't bother.
                 return;
@@ -507,7 +542,16 @@ namespace Robust.Client.UserInterface
             if (!IsMeasureValid || PreviousMeasure != availableSize)
             {
                 IsMeasureValid = true;
-                var desired = MeasureCore(availableSize);
+                _measuring = true;
+                Vector2 desired;
+                try
+                {
+                    desired = MeasureCore(availableSize);
+                }
+                finally
+                {
+                    _measuring = false;
+                }
 
                 if (desired.X < 0 || desired.Y < 0 || !float.IsFinite(desired.X) || !float.IsFinite(desired.Y))
                     throw new InvalidOperationException("Invalid size returned from Measure()");
@@ -539,16 +583,7 @@ namespace Robust.Client.UserInterface
 
             var constrained = ApplySizeConstraints(this, withoutMargin);
 
-            Vector2 measured;
-            try
-            {
-                _measuring = true;
-                measured = MeasureOverride(constrained);
-            }
-            finally
-            {
-                _measuring = false;
-            }
+            var measured = MeasureOverride(constrained);
 
             if (!float.IsNaN(SetWidth))
             {
@@ -565,8 +600,8 @@ namespace Robust.Client.UserInterface
             measured.Y = Math.Clamp(measured.Y, MinHeight, MaxHeight);
 
             measured = _margin.Inflate(measured);
-            measured = Vector2.ComponentMin(measured, availableSize);
-            measured = Vector2.ComponentMax(measured, Vector2.Zero);
+            measured = Vector2.Min(measured, availableSize);
+            measured = Vector2.Max(measured, Vector2.Zero);
             return measured;
         }
 
@@ -580,7 +615,7 @@ namespace Robust.Client.UserInterface
             foreach (var child in Children)
             {
                 child.Measure(availableSize);
-                min = Vector2.ComponentMax(min, child.DesiredSize);
+                min = Vector2.Max(min, child.DesiredSize);
             }
 
             return min;
@@ -603,14 +638,22 @@ namespace Robust.Client.UserInterface
         /// </summary>
         public void Arrange(UIBox2 finalRect)
         {
-            if (!IsMeasureValid)
-                Measure(PreviousMeasure ?? finalRect.Size);
-
-            if (!IsArrangeValid || PreviousArrange != finalRect)
+            _arranging = true;
+            try
             {
-                IsArrangeValid = true;
-                ArrangeCore(finalRect);
-                PreviousArrange = finalRect;
+                if (!IsMeasureValid)
+                    Measure(PreviousMeasure ?? finalRect.Size);
+
+                if (!IsArrangeValid || PreviousArrange != finalRect)
+                {
+                    IsArrangeValid = true;
+                    ArrangeCore(finalRect);
+                    PreviousArrange = finalRect;
+                }
+            }
+            finally
+            {
+                _arranging = false;
             }
         }
 
@@ -640,7 +683,7 @@ namespace Robust.Client.UserInterface
 
             var arranged = ArrangeOverride(size);
 
-            size = Vector2.ComponentMin(arranged, size);
+            size = Vector2.Min(arranged, size);
 
             switch (HorizontalAlignment)
             {
@@ -706,9 +749,9 @@ namespace Robust.Client.UserInterface
             maxH = MathHelper.Clamp(maxConstraint, minH, maxH);
 
             minConstraint = float.IsNaN(setH) ? 0 : setH;
-            minH = MathHelper.Clamp(maxH, minConstraint, minH);
+            minH = MathHelper.Clamp(minConstraint, minH, maxH);
 
-            return (
+            return new Vector2(
                 Math.Clamp(avail.X, minW, maxW),
                 Math.Clamp(avail.Y, minH, maxH));
         }

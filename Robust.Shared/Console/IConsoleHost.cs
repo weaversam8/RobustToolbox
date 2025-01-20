@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Robust.Shared.Players;
+using Robust.Shared.Player;
+using Robust.Shared.Reflection;
+using Robust.Shared.Utility;
 
 namespace Robust.Shared.Console
 {
@@ -21,7 +23,7 @@ namespace Robust.Shared.Console
     /// <summary>
     /// Called to fetch completions for a console command (async). See <see cref="IConsoleCommand.GetCompletionAsync"/> for details.
     /// </summary>
-    public delegate ValueTask<CompletionResult> ConCommandCompletionAsyncCallback(IConsoleShell shell, string[] args);
+    public delegate ValueTask<CompletionResult> ConCommandCompletionAsyncCallback(IConsoleShell shell, string[] args, string argStr);
 
     public delegate void ConAnyCommandCallback(IConsoleShell shell, string commandName, string argStr, string[] args);
 
@@ -172,6 +174,33 @@ namespace Robust.Shared.Console
             ConCommandCallback callback,
             ConCommandCompletionAsyncCallback completionCallback,
             bool requireServerOrSingleplayer = false);
+
+        /// <summary>
+        /// Register an existing console command instance directly.
+        /// </summary>
+        /// <remarks>
+        /// For this to be useful, the command has to be somehow excluded from automatic registration,
+        /// such as by using the <see cref="ReflectAttribute"/>.
+        /// </remarks>
+        /// <param name="command">The command to register.</param>
+        /// <seealso cref="BeginRegistrationRegion"/>
+        void RegisterCommand(IConsoleCommand command);
+
+        /// <summary>
+        /// Begin a region for registering many console commands in one go.
+        /// The region can be ended with <see cref="EndRegistrationRegion"/>.
+        /// </summary>
+        /// <remarks>
+        /// Commands registered inside this region temporarily suppress some updating
+        /// logic that would cause significant wasted work. This logic runs when the region is ended instead.
+        /// </remarks>
+        void BeginRegistrationRegion();
+
+        /// <summary>
+        /// End a registration region started with <see cref="BeginRegistrationRegion"/>.
+        /// </summary>
+        void EndRegistrationRegion();
+
         #endregion
 
         /// <summary>
@@ -248,6 +277,8 @@ namespace Robust.Shared.Console
         /// </param>
         /// <param name="text">Text message to send.</param>
         void WriteLine(ICommonSession? session, string text);
+
+        void WriteLine(ICommonSession? session, FormattedMessage msg);
 
         /// <summary>
         /// Sends a foreground colored text string to the remote session.

@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
+using Robust.Shared.Collections;
 using Robust.Shared.Configuration;
 using Robust.Shared.IoC;
 using Robust.Shared.Log;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
+using Robust.Shared.Map.Events;
 using Robust.Shared.Maths;
 using Robust.Shared.Physics;
 using Robust.Shared.Physics.Collision.Shapes;
@@ -20,9 +23,9 @@ namespace Robust.Shared.GameObjects
     public abstract class SharedGridFixtureSystem : EntitySystem
     {
         [Dependency] private readonly FixtureSystem _fixtures = default!;
+        [Dependency] private readonly SharedMapSystem _map = default!;
         [Dependency] private readonly IConfigurationManager _cfg = default!;
 
-        protected ISawmill Sawmill = default!;
         private bool _enabled;
         private float _fixtureEnlargement;
 
@@ -32,12 +35,17 @@ namespace Robust.Shared.GameObjects
         {
             base.Initialize();
             UpdatesBefore.Add(typeof(SharedBroadphaseSystem));
-            Sawmill = Logger.GetSawmill("physics");
 
-            _cfg.OnValueChanged(CVars.GenerateGridFixtures, SetEnabled, true);
-            _cfg.OnValueChanged(CVars.GridFixtureEnlargement, SetEnlargement, true);
+            Subs.CVar(_cfg, CVars.GenerateGridFixtures, SetEnabled, true);
+            Subs.CVar(_cfg, CVars.GridFixtureEnlargement, SetEnlargement, true);
 
             SubscribeLocalEvent<GridInitializeEvent>(OnGridInit);
+            SubscribeLocalEvent<RegenerateGridBoundsEvent>(OnGridBoundsRegenerate);
+        }
+
+        private void OnGridBoundsRegenerate(ref RegenerateGridBoundsEvent ev)
+        {
+            RegenerateCollision(ev.Entity, ev.ChunkRectangles, ev.RemovedChunks);
         }
 
         protected virtual void OnGridInit(GridInitializeEvent ev)
@@ -47,15 +55,7 @@ namespace Robust.Shared.GameObjects
 
             // This will also check for grid splits if applicable.
             var grid = Comp<MapGridComponent>(ev.EntityUid);
-            grid.RegenerateCollision(grid.GetMapChunks().Values.ToHashSet());
-        }
-
-        public override void Shutdown()
-        {
-            base.Shutdown();
-
-            _cfg.UnsubValueChanged(CVars.GenerateGridFixtures, SetEnabled);
-            _cfg.UnsubValueChanged(CVars.GridFixtureEnlargement, SetEnlargement);
+            _map.RegenerateCollision(ev.EntityUid, grid, _map.GetMapChunks(ev.EntityUid, grid).Values.ToHashSet());
         }
 
         private void SetEnabled(bool value) => _enabled = value;
@@ -67,36 +67,41 @@ namespace Robust.Shared.GameObjects
             Dictionary<MapChunk, List<Box2i>> mapChunks,
             List<MapChunk> removedChunks)
         {
-            if (!_enabled) return;
+            if (!_enabled)
+                return;
 
             if (!EntityManager.TryGetComponent(uid, out PhysicsComponent? body))
             {
-                Sawmill.Error($"Trying to regenerate collision for {uid} that doesn't have {nameof(body)}");
+                Log.Error($"Trying to regenerate collision for {uid} that doesn't have {nameof(body)}");
                 return;
             }
 
             if (!EntityManager.TryGetComponent(uid, out FixturesComponent? manager))
             {
-                Sawmill.Error($"Trying to regenerate collision for {uid} that doesn't have {nameof(manager)}");
+                Log.Error($"Trying to regenerate collision for {uid} that doesn't have {nameof(manager)}");
                 return;
             }
 
             if (!EntityManager.TryGetComponent(uid, out TransformComponent? xform))
             {
-                Sawmill.Error($"Trying to regenerate collision for {uid} that doesn't have {nameof(TransformComponent)}");
+                Log.Error($"Trying to regenerate collision for {uid} that doesn't have {nameof(TransformComponent)}");
                 return;
             }
 
-            var fixtures = new List<Fixture>(mapChunks.Count);
+            var fixtures = new Dictionary<string, Fixture>(mapChunks.Count);
 
             foreach (var (chunk, rectangles) in mapChunks)
             {
                 UpdateFixture(uid, chunk, rectangles, body, manager, xform);
-                fixtures.AddRange(chunk.Fixtures);
+
+                foreach (var id in chunk.Fixtures)
+                {
+                    fixtures[id] = manager.Fixtures[id];
+                }
             }
 
-            _fixtures.FixtureUpdate(uid, manager: manager, body: body);
             EntityManager.EventBus.RaiseLocalEvent(uid,new GridFixtureChangeEvent {NewFixtures = fixtures}, true);
+            _fixtures.FixtureUpdate(uid, manager: manager, body: body);
 
             CheckSplit(uid, mapChunks, removedChunks);
         }
@@ -118,7 +123,7 @@ namespace Robust.Shared.GameObjects
 
             // Additionally, we need to handle map deserialization where content may have stored its own data
             // on the grid (e.g. mass) which we want to preserve.
-            var newFixtures = new List<Fixture>();
+            var newFixtures = new ValueList<(string Id, Fixture Fixture)>();
 
             Span<Vector2> vertices = stackalloc Vector2[4];
 
@@ -134,83 +139,96 @@ namespace Robust.Shared.GameObjects
 
                 poly.Set(vertices, 4);
 
+#pragma warning disable CS0618
                 var newFixture = new Fixture(
                     poly,
                     MapGridHelpers.CollisionGroup,
                     MapGridHelpers.CollisionGroup,
-                    true) {ID = $"grid_chunk-{bounds.Left}-{bounds.Bottom}",
-                    Body = body};
+                    true)
+                {
+                    Owner = uid
+                };
+#pragma warning restore CS0618
 
-                newFixtures.Add(newFixture);
+                newFixtures.Add(($"grid_chunk-{bounds.Left}-{bounds.Bottom}", newFixture));
             }
 
-            var toRemove = new RemQueue<Fixture>();
             // Check if we even need to issue an eventbus event
             var updated = false;
 
-            foreach (var oldFixture in chunk.Fixtures)
+            foreach (var oldId in chunk.Fixtures)
             {
+                var oldFixture = manager.Fixtures[oldId];
                 var existing = false;
 
                 // Handle deleted / updated fixtures
                 // (TODO: Check IDs and cross-reference for updates?)
                 for (var i = newFixtures.Count - 1; i >= 0; i--)
                 {
-                    var fixture = newFixtures[i];
-                    if (!oldFixture.Equals(fixture)) continue;
+                    var fixture = newFixtures[i].Fixture;
+
+                    // TODO GRIDS
+                    // Fix this
+                    // This **only** works if we assume the density is always the default (PhysicsConstants.DefaultDensity).
+                    // Hence, this always fails in SS14 because ShuttleSystem.OnGridFixtureChange changes the density.
+                    // So it constantly creats & destroys fixtures unnecessarily
+                    // AAAAA
+                    if (!oldFixture.Equals(fixture))
+                        continue;
+
                     existing = true;
                     newFixtures.RemoveSwap(i);
                     break;
                 }
 
+                if (existing)
+                    continue;
+
                 // Doesn't align with any new fixtures so delete
-                if (existing) continue;
-
-                toRemove.Add(oldFixture);
+                chunk.Fixtures.Remove(oldId);
+                _fixtures.DestroyFixture(uid, oldId, oldFixture, false, body: body, manager: manager, xform: xform);
+                updated = true;
             }
 
-            foreach (var fixture in toRemove)
-            {
-                // TODO add a DestroyFixture() override that takes in a list.
-                // reduced broadphase lookups
-                chunk.Fixtures.Remove(fixture);
-                _fixtures.DestroyFixture(uid, fixture, false, body: body, manager: manager, xform: xform);
-            }
-
-            if (newFixtures.Count > 0 || toRemove.List?.Count > 0)
+            if (newFixtures.Count > 0)
             {
                 updated = true;
             }
 
             // Anything remaining is a new fixture (or at least, may have not serialized onto the chunk yet).
-            foreach (var fixture in newFixtures)
+            foreach (var (id, fixture) in newFixtures.Span)
             {
-                var existingFixture = _fixtures.GetFixtureOrNull(uid, fixture.ID, manager: manager);
+                chunk.Fixtures.Add(id);
+                var existingFixture = _fixtures.GetFixtureOrNull(uid, id, manager: manager);
                 // Check if it's the same (otherwise remove anyway).
+                // TODO GRIDS
+                // wasn't this already checked?
                 if (existingFixture?.Shape is PolygonShape poly &&
                     poly.EqualsApprox((PolygonShape) fixture.Shape))
                 {
-                    chunk.Fixtures.Add(existingFixture);
                     continue;
                 }
 
-                chunk.Fixtures.Add(fixture);
-                _fixtures.CreateFixture(uid, fixture, false, manager, body, xform);
+                _fixtures.CreateFixture(uid, id, fixture, false, manager, body, xform);
             }
 
             return updated;
         }
     }
 
+    /// <summary>
+    /// Event raised after a grids fixtures have changed, but before <see cref="FixtureSystem.FixtureUpdate"/> is called.
+    /// Allows content to modify some fixture properties, like density.
+    /// </summary>
     public sealed class GridFixtureChangeEvent : EntityEventArgs
     {
-        public List<Fixture> NewFixtures { get; init; } = default!;
+        public Dictionary<string, Fixture> NewFixtures { get; init; } = default!;
     }
 
     [Serializable, NetSerializable]
     public sealed class ChunkSplitDebugMessage : EntityEventArgs
     {
-        public EntityUid Grid;
+        public NetEntity Grid;
         public Dictionary<Vector2i, List<List<Vector2i>>> Nodes = new ();
         public List<(Vector2 Start, Vector2 End)> Connections = new();
     }

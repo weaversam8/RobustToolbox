@@ -5,7 +5,6 @@ using Robust.Shared.Containers;
 using Robust.Shared.GameObjects;
 using Robust.Shared.GameStates;
 using Robust.Shared.IoC;
-using Robust.Shared.Log;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Physics.Collision;
@@ -14,6 +13,7 @@ using Robust.Shared.Physics.Controllers;
 using Robust.Shared.Physics.Dynamics;
 using Robust.Shared.Physics.Events;
 using Robust.Shared.Threading;
+using Robust.Shared.Timing;
 using Robust.Shared.Utility;
 using DependencyAttribute = Robust.Shared.IoC.DependencyAttribute;
 
@@ -27,7 +27,6 @@ namespace Robust.Shared.Physics.Systems
          * Raycasts for non-box shapes.
          * TOI Solver (continuous collision detection)
          * Poly cutting
-         * Chain shape
          */
 
         public static readonly Histogram TickUsageControllerBeforeSolveHistogram = Metrics.CreateHistogram("robust_entity_physics_controller_before_solve",
@@ -44,39 +43,73 @@ namespace Robust.Shared.Physics.Systems
                 Buckets = Histogram.ExponentialBuckets(0.000_001, 1.5, 25)
             });
 
-        [Dependency] private readonly IConfigurationManager _configManager = default!;
         [Dependency] private readonly IManifoldManager _manifoldManager = default!;
         [Dependency] private readonly IMapManager _mapManager = default!;
         [Dependency] private readonly IParallelManager _parallel = default!;
         [Dependency] private readonly IConfigurationManager _cfg = default!;
         [Dependency] private readonly IDependencyCollection _deps = default!;
-        [Dependency] private readonly SharedBroadphaseSystem _broadphase = default!;
-        [Dependency] private readonly EntityLookupSystem _lookup = default!;
-        [Dependency] private readonly SharedJointSystem _joints = default!;
-        [Dependency] private readonly SharedGridTraversalSystem _traversal = default!;
-        [Dependency] private readonly SharedTransformSystem _transform = default!;
-        [Dependency] private readonly SharedDebugPhysicsSystem _debugPhysics = default!;
         [Dependency] private readonly Gravity2DController _gravity = default!;
+        [Dependency] private readonly EntityLookupSystem _lookup = default!;
+        [Dependency] private readonly SharedBroadphaseSystem _broadphase = default!;
+        [Dependency] private readonly SharedContainerSystem _containerSystem = default!;
+        [Dependency] private readonly SharedDebugPhysicsSystem _debugPhysics = default!;
+        [Dependency] private readonly SharedJointSystem _joints = default!;
+        [Dependency] private readonly SharedTransformSystem _transform = default!;
+        [Dependency] private readonly CollisionWakeSystem _wakeSystem = default!;
 
         private int _substeps;
 
+        /// <summary>
+        /// A variation of <see cref="IGameTiming.CurTime"/> that takes into account the current physics sub-step.
+        /// Useful for some entities that need to interpolate their positions during sub-steps.
+        /// </summary>
+        public TimeSpan? EffectiveCurTime;
+
         public bool MetricsEnabled { get; protected set; }
 
-        private ISawmill _sawmill = default!;
+        private EntityQuery<FixturesComponent> _fixturesQuery;
+        protected EntityQuery<PhysicsComponent> PhysicsQuery;
+        private EntityQuery<TransformComponent> _xformQuery;
+        private EntityQuery<CollideOnAnchorComponent> _anchorQuery;
+        protected EntityQuery<PhysicsMapComponent> PhysMapQuery;
+        protected EntityQuery<MapComponent> MapQuery;
+
+        private ComponentRegistration _physicsReg = default!;
+        private byte _angularVelocityIndex;
 
         public override void Initialize()
         {
             base.Initialize();
 
-            _sawmill = Logger.GetSawmill("physics");
-            _sawmill.Level = LogLevel.Info;
+            _physicsReg = EntityManager.ComponentFactory.GetRegistration(CompIdx.Index<PhysicsComponent>());
+
+            // If you update this then update the delta state + GetState + HandleState!
+            EntityManager.ComponentFactory.RegisterNetworkedFields(_physicsReg,
+                nameof(PhysicsComponent.CanCollide),
+                nameof(PhysicsComponent.BodyStatus),
+                nameof(PhysicsComponent.BodyType),
+                nameof(PhysicsComponent.SleepingAllowed),
+                nameof(PhysicsComponent.FixedRotation),
+                nameof(PhysicsComponent.Friction),
+                nameof(PhysicsComponent.Force),
+                nameof(PhysicsComponent.Torque),
+                nameof(PhysicsComponent.LinearDamping),
+                nameof(PhysicsComponent.AngularDamping),
+                nameof(PhysicsComponent.AngularVelocity),
+                nameof(PhysicsComponent.LinearVelocity));
+
+            _angularVelocityIndex = 10;
+
+            _fixturesQuery = GetEntityQuery<FixturesComponent>();
+            PhysicsQuery = GetEntityQuery<PhysicsComponent>();
+            _xformQuery = GetEntityQuery<TransformComponent>();
+            _anchorQuery = GetEntityQuery<CollideOnAnchorComponent>();
+            PhysMapQuery = GetEntityQuery<PhysicsMapComponent>();
+            MapQuery = GetEntityQuery<MapComponent>();
 
             SubscribeLocalEvent<GridAddEvent>(OnGridAdd);
-            SubscribeLocalEvent<PhysicsWakeEvent>(OnWake);
-            SubscribeLocalEvent<PhysicsSleepEvent>(OnSleep);
             SubscribeLocalEvent<CollisionChangeEvent>(OnCollisionChange);
             SubscribeLocalEvent<PhysicsComponent, EntGotRemovedFromContainerMessage>(HandleContainerRemoved);
-            SubscribeLocalEvent<EntParentChangedMessage>(OnParentChange);
             SubscribeLocalEvent<PhysicsMapComponent, ComponentInit>(HandlePhysicsMapInit);
             SubscribeLocalEvent<PhysicsComponent, ComponentInit>(OnPhysicsInit);
             SubscribeLocalEvent<PhysicsComponent, ComponentShutdown>(OnPhysicsShutdown);
@@ -85,9 +118,9 @@ namespace Robust.Shared.Physics.Systems
             InitializeIsland();
             InitializeContacts();
 
-            _configManager.OnValueChanged(CVars.AutoClearForces, OnAutoClearChange);
-            _configManager.OnValueChanged(CVars.NetTickrate, UpdateSubsteps, true);
-            _configManager.OnValueChanged(CVars.TargetMinimumTickrate, UpdateSubsteps, true);
+            Subs.CVar(_cfg, CVars.AutoClearForces, OnAutoClearChange);
+            Subs.CVar(_cfg, CVars.NetTickrate, UpdateSubsteps, true);
+            Subs.CVar(_cfg, CVars.TargetMinimumTickrate, UpdateSubsteps, true);
         }
 
         private void OnPhysicsShutdown(EntityUid uid, PhysicsComponent component, ComponentShutdown args)
@@ -101,7 +134,7 @@ namespace Robust.Shared.Physics.Systems
 
         private void OnCollisionChange(ref CollisionChangeEvent ev)
         {
-            var uid = ev.Body.Owner;
+            var uid = ev.BodyUid;
             var mapId = Transform(uid).MapID;
 
             if (mapId == MapId.Nullspace)
@@ -131,58 +164,50 @@ namespace Robust.Shared.Physics.Systems
 
         private void UpdateSubsteps(int obj)
         {
-            var targetMinTickrate = (float) _configManager.GetCVar(CVars.TargetMinimumTickrate);
-            var serverTickrate = (float) _configManager.GetCVar(CVars.NetTickrate);
+            var targetMinTickrate = (float) _cfg.GetCVar(CVars.TargetMinimumTickrate);
+            var serverTickrate = (float) _cfg.GetCVar(CVars.NetTickrate);
             _substeps = (int)Math.Ceiling(targetMinTickrate / serverTickrate);
         }
 
-        private void OnParentChange(ref EntParentChangedMessage args)
+        internal void OnParentChange(Entity<TransformComponent, MetaDataComponent> ent, EntityUid oldParent, EntityUid? oldMap)
         {
             // We do not have a directed/body subscription, because the entity changing parents may not have a physics component, but one of its children might.
-            var uid = args.Entity;
-            var xform = args.Transform;
+            var (uid, xform, meta) = ent;
 
             // If this entity has yet to be initialized, then we can skip this as equivalent code will get run during
             // init anyways. HOWEVER: it is possible that one of the children of this entity are already post-init, in
             // which case they still need to handle map changes. This frequently happens when clients receives a server
             // state where a known/old entity gets attached to a new, previously unknown, entity. The new entity will be
             // uninitialized but have an initialized child.
-            if (xform.ChildCount == 0 && LifeStage(uid) < EntityLifeStage.Initialized)
+            if (xform.ChildCount == 0 && meta.EntityLifeStage < EntityLifeStage.Initialized)
                 return;
 
             // Is this entity getting recursively detached after it's parent was already detached to null?
-            if (args.OldMapId == MapId.Nullspace && xform.MapID == MapId.Nullspace)
+            if (oldMap == null && xform.MapUid == null)
                 return;
 
-            var body = CompOrNull<PhysicsComponent>(uid);
+            var body = PhysicsQuery.CompOrNull(uid);
 
             // Handle map changes
-            if (args.OldMapId != xform.MapID)
+            if (oldMap != xform.MapUid)
             {
                 // This will also handle broadphase updating & joint clearing.
-                HandleMapChange(uid, xform, body, args.OldMapId, xform.MapID);
+                HandleMapChange(uid, xform, body, oldMap, xform.MapUid);
+                return;
             }
 
-            if (args.OldMapId != xform.MapID)
-                return;
-
             if (body != null)
-                HandleParentChangeVelocity(uid, body, ref args, xform);
+                HandleParentChangeVelocity(uid, body, oldParent, xform);
         }
 
         /// <summary>
         ///     Recursively add/remove from awake bodies, clear joints, remove from move buffer, and update broadphase.
         /// </summary>
-        private void HandleMapChange(EntityUid uid, TransformComponent xform, PhysicsComponent? body, MapId oldMapId, MapId newMapId)
+        private void HandleMapChange(EntityUid uid, TransformComponent xform, PhysicsComponent? body, EntityUid? oldMapId, EntityUid? newMapId)
         {
-            var bodyQuery = GetEntityQuery<PhysicsComponent>();
-            var xformQuery = GetEntityQuery<TransformComponent>();
-            var jointQuery = GetEntityQuery<JointComponent>();
-
-            TryComp(_mapManager.GetMapEntityId(oldMapId), out PhysicsMapComponent? oldMap);
-            TryComp(_mapManager.GetMapEntityId(newMapId), out PhysicsMapComponent? newMap);
-
-            RecursiveMapUpdate(uid, xform, body, newMap, oldMap, bodyQuery, xformQuery, jointQuery);
+            PhysMapQuery.TryGetComponent(oldMapId, out var oldMap);
+            PhysMapQuery.TryGetComponent(newMapId, out var newMap);
+            RecursiveMapUpdate(uid, xform, body, newMap, oldMap);
         }
 
         /// <summary>
@@ -193,10 +218,7 @@ namespace Robust.Shared.Physics.Systems
             TransformComponent xform,
             PhysicsComponent? body,
             PhysicsMapComponent? newMap,
-            PhysicsMapComponent? oldMap,
-            EntityQuery<PhysicsComponent> bodyQuery,
-            EntityQuery<TransformComponent> xformQuery,
-            EntityQuery<JointComponent> jointQuery)
+            PhysicsMapComponent? oldMap)
         {
             DebugTools.Assert(!Deleted(uid));
 
@@ -205,24 +227,22 @@ namespace Robust.Shared.Physics.Systems
             {
                 if (body.Awake)
                 {
-                    oldMap?.RemoveSleepBody(body);
-                    newMap?.AddAwakeBody(body);
+                    RemoveSleepBody(uid, body, oldMap);
+                    AddAwakeBody(uid, body, newMap);
                     DebugTools.Assert(body.Awake);
                 }
                 else
                     DebugTools.Assert(oldMap?.AwakeBodies.Contains(body) != true);
             }
 
-            if (jointQuery.TryGetComponent(uid, out var joint))
-                _joints.ClearJoints(uid, joint);
+            _joints.ClearJoints(uid);
 
-            var childEnumerator = xform.ChildEnumerator;
-            while (childEnumerator.MoveNext(out var child))
+            foreach (var child in xform._children)
             {
-                if (xformQuery.TryGetComponent(child, out var childXform))
+                if (_xformQuery.TryGetComponent(child, out var childXform))
                 {
-                    bodyQuery.TryGetComponent(child, out var childBody);
-                    RecursiveMapUpdate(child.Value, childXform, childBody, newMap, oldMap, bodyQuery, xformQuery, jointQuery);
+                    PhysicsQuery.TryGetComponent(child, out var childBody);
+                    RecursiveMapUpdate(child, childXform, childBody, newMap, oldMap);
                 }
             }
         }
@@ -246,30 +266,18 @@ namespace Robust.Shared.Physics.Systems
         {
             base.Shutdown();
 
-            ShutdownIsland();
-            _configManager.UnsubValueChanged(CVars.AutoClearForces, OnAutoClearChange);
+            ShutdownContacts();
         }
 
-        private void OnWake(ref PhysicsWakeEvent @event)
+        private void UpdateMapAwakeState(EntityUid uid, PhysicsComponent body)
         {
-            var mapId = EntityManager.GetComponent<TransformComponent>(@event.Body.Owner).MapID;
-
-            if (mapId == MapId.Nullspace)
+            if (Transform(uid).MapUid is not {} map)
                 return;
 
-            EntityUid tempQualifier = _mapManager.GetMapEntityId(mapId);
-            EntityManager.GetComponent<PhysicsMapComponent>(tempQualifier).AddAwakeBody(@event.Body);
-        }
-
-        private void OnSleep(ref PhysicsSleepEvent @event)
-        {
-            var mapId = EntityManager.GetComponent<TransformComponent>(@event.Body.Owner).MapID;
-
-            if (mapId == MapId.Nullspace)
-                return;
-
-            EntityUid tempQualifier = _mapManager.GetMapEntityId(mapId);
-            EntityManager.GetComponent<PhysicsMapComponent>(tempQualifier).RemoveSleepBody(@event.Body);
+            if (body.Awake)
+                AddAwakeBody(uid, body, map);
+            else
+                RemoveSleepBody(uid, body, map);
         }
 
         private void HandleContainerRemoved(EntityUid uid, PhysicsComponent physics, EntGotRemovedFromContainerMessage message)
@@ -278,7 +286,7 @@ namespace Robust.Shared.Physics.Systems
             if (MetaData(uid).EntityLifeStage >= EntityLifeStage.Terminating) return;
 
             // If this entity is only meant to collide when anchored, return early.
-            if (TryComp(uid, out CollideOnAnchorComponent? collideComp) && collideComp.Enable)
+            if (_anchorQuery.TryGetComponent(uid, out var collideComp) && collideComp.Enable)
                 return;
 
             WakeBody(uid, body: physics);
@@ -293,6 +301,7 @@ namespace Robust.Shared.Physics.Systems
         {
             var frameTime = deltaTime / _substeps;
 
+            EffectiveCurTime = _gameTiming.CurTime;
             for (int i = 0; i < _substeps; i++)
             {
                 var updateBeforeSolve = new PhysicsUpdateBeforeSolveEvent(prediction, frameTime);
@@ -314,9 +323,9 @@ namespace Robust.Shared.Physics.Systems
                 CollideContacts();
                 var enumerator = AllEntityQuery<PhysicsMapComponent>();
 
-                while (enumerator.MoveNext(out var comp))
+                while (enumerator.MoveNext(out var uid, out var comp))
                 {
-                    Step(comp, frameTime, prediction);
+                    Step(uid, comp, frameTime, prediction);
                 }
 
                 var updateAfterSolve = new PhysicsUpdateAfterSolveEvent(prediction, frameTime);
@@ -333,8 +342,10 @@ namespace Robust.Shared.Physics.Systems
                     }
                 }
 
-                _traversal.ProcessMovement();
+                EffectiveCurTime = EffectiveCurTime.Value + TimeSpan.FromSeconds(frameTime);
             }
+
+            EffectiveCurTime = null;
         }
 
         protected virtual void FinalStep(PhysicsMapComponent component)

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Diagnostics.CodeAnalysis;
+using System.Numerics;
 using Robust.Shared.Maths;
 
 namespace Robust.Client.UserInterface.Controls
@@ -301,7 +302,6 @@ namespace Robust.Client.UserInterface.Controls
             {
                 if (!child.Visible)
                 {
-                    index--;
                     continue;
                 }
 

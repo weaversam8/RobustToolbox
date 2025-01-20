@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 using Robust.Shared.Maths;
 using Robust.Shared.Physics.Systems;
 using Robust.Shared.Serialization;
@@ -14,7 +15,7 @@ namespace Robust.Shared.Physics.Collision.Shapes
     /// </summary>
     [Serializable, NetSerializable]
     [DataDefinition]
-    public sealed class PhysShapeCircle : IPhysShape, IEquatable<PhysShapeCircle>
+    public sealed partial class PhysShapeCircle : IPhysShape, IEquatable<PhysShapeCircle>
     {
         public int ChildCount => 1;
 

@@ -8,7 +8,7 @@ using Robust.UnitTesting.Server;
 namespace Robust.Benchmarks.EntityManager;
 
 [Virtual]
-public class SpawnDeleteEntityBenchmark
+public partial class SpawnDeleteEntityBenchmark
 {
     private ISimulation _simulation = default!;
     private IEntityManager _entityManager = default!;
@@ -29,10 +29,9 @@ public class SpawnDeleteEntityBenchmark
             .InitializeInstance();
 
         _entityManager = _simulation.Resolve<IEntityManager>();
-
-        _mapCoords = new MapCoordinates(0, 0, new MapId(1));
-        var uid = _simulation.AddMap(_mapCoords.MapId);
-        _entCoords = new EntityCoordinates(uid, 0, 0);
+        var (map, mapId) = _simulation.CreateMap();
+        _mapCoords = new MapCoordinates(default, mapId);
+        _entCoords = new EntityCoordinates(map, 0, 0);
     }
 
     [Benchmark(Baseline = true)]
@@ -56,7 +55,7 @@ public class SpawnDeleteEntityBenchmark
     }
 
     [ComponentProtoName("A")]
-    public sealed class A : Component
+    public sealed partial class A : Component
     {
     }
 }

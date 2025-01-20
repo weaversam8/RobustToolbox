@@ -1,4 +1,4 @@
-using System.Linq;
+using System.Numerics;
 using NUnit.Framework;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
@@ -29,8 +29,8 @@ public sealed class PhysicsMap_Test
         var fixtureSystem = system.GetEntitySystem<FixtureSystem>();
         var xformSystem = system.GetEntitySystem<SharedTransformSystem>();
 
-        var mapId = mapManager.CreateMap();
-        var mapId2 = mapManager.CreateMap();
+        var mapId = sim.CreateMap().MapId;
+        var mapId2 = sim.CreateMap().MapId;
         var mapUid = mapManager.GetMapEntityId(mapId);
         var mapUid2 = mapManager.GetMapEntityId(mapId2);
 
@@ -43,7 +43,7 @@ public sealed class PhysicsMap_Test
 
         physSystem.SetBodyType(parent, BodyType.Dynamic);
         physSystem.SetSleepingAllowed(parent, parentBody, false);
-        fixtureSystem.CreateFixture(parent, new Fixture(new PhysShapeCircle(0.5f), 0, 0, false), body: parentBody);
+        fixtureSystem.CreateFixture(parent, "fix1", new Fixture(new PhysShapeCircle(0.5f), 0, 0, false), body: parentBody);
         physSystem.WakeBody(parent);
         Assert.That(physicsMap.AwakeBodies, Does.Contain(parentBody));
 
@@ -52,7 +52,7 @@ public sealed class PhysicsMap_Test
 
         physSystem.SetBodyType(child, BodyType.Dynamic);
         physSystem.SetSleepingAllowed(child, childBody, false);
-        fixtureSystem.CreateFixture(child, new Fixture(new PhysShapeCircle(0.5f), 0, 0, false), body: childBody);
+        fixtureSystem.CreateFixture(child, "fix1", new Fixture(new PhysShapeCircle(0.5f), 0, 0, false), body: childBody);
         physSystem.WakeBody(child, body: childBody);
 
         Assert.That(physicsMap.AwakeBodies, Does.Contain(childBody));

@@ -10,7 +10,6 @@ using Robust.Shared.Utility;
 
 namespace Robust.Shared.ContentPack
 {
-    [Virtual]
     internal partial class ResourceManager
     {
         /// <summary>
@@ -46,16 +45,17 @@ namespace Robust.Shared.ContentPack
             public bool TryGetFile(ResPath relPath, [NotNullWhen(true)] out Stream? stream)
             {
                 var path = GetPath(relPath);
-                if (!File.Exists(path))
-                {
-                    stream = null;
-                    return false;
-                }
-
                 CheckPathCasing(relPath);
 
-                stream = File.OpenRead(path);
-                return true;
+                var ret = FileHelper.TryOpenFileRead(path, out var fStream);
+                stream = fStream;
+                return ret;
+            }
+
+            public bool FileExists(ResPath relPath)
+            {
+                var path = GetPath(relPath);
+                return File.Exists(path);
             }
 
             internal string GetPath(ResPath relPath)

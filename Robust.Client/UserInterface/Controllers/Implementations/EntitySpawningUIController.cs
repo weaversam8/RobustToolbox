@@ -1,14 +1,18 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using Robust.Client.GameObjects;
 using Robust.Client.Placement;
 using Robust.Client.ResourceManagement;
 using Robust.Client.UserInterface.Controls;
 using Robust.Client.UserInterface.CustomControls;
+using Robust.Shared;
+using Robust.Shared.Configuration;
 using Robust.Shared.Enums;
 using Robust.Shared.IoC;
 using Robust.Shared.Prototypes;
+using Robust.Shared.Serialization.Manager.Attributes;
 using Robust.Shared.Utility;
 using static Robust.Client.UserInterface.Controls.BaseButton;
 using static Robust.Client.UserInterface.Controls.LineEdit;
@@ -17,9 +21,9 @@ namespace Robust.Client.UserInterface.Controllers.Implementations;
 
 public sealed class EntitySpawningUIController : UIController
 {
+    [Dependency] private readonly IConfigurationManager _cfg = default!;
     [Dependency] private readonly IPlacementManager _placement = default!;
     [Dependency] private readonly IPrototypeManager _prototypes = default!;
-    [Dependency] private readonly IResourceCache _resources = default!;
 
     private EntitySpawnWindow? _window;
     private readonly List<EntityPrototype> _shownEntities = new();
@@ -191,6 +195,9 @@ public sealed class EntitySpawningUIController : UIController
         _window.SelectedButton = null;
         searchStr = searchStr?.ToLowerInvariant();
 
+        var categoryFilter = _cfg.GetCVar(CVars.EntitiesCategoryFilter);
+        _prototypes.TryIndex<EntityCategoryPrototype>(categoryFilter, out var filter);
+
         foreach (var prototype in _prototypes.EnumeratePrototypes<EntityPrototype>())
         {
             if (prototype.Abstract)
@@ -198,7 +205,12 @@ public sealed class EntitySpawningUIController : UIController
                 continue;
             }
 
-            if (prototype.NoSpawn)
+            if (prototype.HideSpawnMenu)
+            {
+                continue;
+            }
+
+            if (filter is not null && !prototype.Categories.Contains(filter))
             {
                 continue;
             }
@@ -211,10 +223,15 @@ public sealed class EntitySpawningUIController : UIController
             _shownEntities.Add(prototype);
         }
 
-        _shownEntities.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.Ordinal));
+        _shownEntities.Sort((a, b) => {
+                var namesComparation = string.Compare(a.Name, b.Name, StringComparison.Ordinal);
+                if (namesComparation == 0)
+                    return string.Compare(a.EditorSuffix, b.EditorSuffix, StringComparison.Ordinal);
+                return namesComparation;
+        });
 
         _window.PrototypeList.TotalItemCount = _shownEntities.Count;
-        _window.PrototypeScrollContainer.SetScrollValue((0, 0));
+        _window.PrototypeScrollContainer.SetScrollValue(new Vector2(0, 0));
         UpdateVisiblePrototypes();
     }
 
@@ -320,8 +337,7 @@ public sealed class EntitySpawningUIController : UIController
         if (_window == null || _window.Disposed)
             return;
 
-        var textures = SpriteComponent.GetPrototypeTextures(prototype, _resources).Select(o => o.Default).ToList();
-        var button = _window.InsertEntityButton(prototype, insertFirst, index, textures);
+        var button = _window.InsertEntityButton(prototype, insertFirst, index);
 
         button.ActualButton.OnToggled += OnEntityButtonToggled;
     }

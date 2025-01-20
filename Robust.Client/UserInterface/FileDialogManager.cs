@@ -32,6 +32,9 @@ namespace Robust.Client.UserInterface
 
         public async Task<Stream?> OpenFile(FileDialogFilters? filters = null)
         {
+            if (_clyde.FileDialogImpl is { } clydeImpl)
+                return await clydeImpl.OpenFile(filters);
+
             var name = await GetOpenFileName(filters);
             if (name == null)
             {
@@ -51,8 +54,11 @@ namespace Robust.Client.UserInterface
             return await OpenFileNfd(filters);
         }
 
-        public async Task<(Stream, bool)?> SaveFile(FileDialogFilters? filters)
+        public async Task<(Stream, bool)?> SaveFile(FileDialogFilters? filters, bool truncate = true)
         {
+            if (_clyde.FileDialogImpl is { } clydeImpl)
+                return await clydeImpl.SaveFile(filters);
+
             var name = await GetSaveFileName(filters);
             if (name == null)
             {
@@ -61,7 +67,7 @@ namespace Robust.Client.UserInterface
 
             try
             {
-                return (File.Open(name, FileMode.Open), true);
+                return (File.Open(name, truncate ? FileMode.Truncate : FileMode.Open), true);
             }
             catch (FileNotFoundException)
             {

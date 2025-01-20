@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Globalization;
 using System.Linq.Expressions;
 using Robust.Shared.Serialization.Manager.Definition;
@@ -56,7 +57,6 @@ public sealed partial class SerializationManager
                 alwaysWrite,
                 contextParam).Compile();
         }, this);
-
     }
 
     private WriteGenericDelegate<T> GetOrCreateWriteGenericDelegate<T>(T value, bool notNullableOverride)
@@ -75,6 +75,14 @@ public sealed partial class SerializationManager
                 ? Expression.Convert(objParam, sameType ? baseType.EnsureNotNullableType() : actualType)
                 : sameType ? objParam : Expression.Convert(objParam, actualType);
 
+            if (baseType.IsGenericType)
+            {
+                // Frozen dictionaries/sets are abstract and have a bunch of implementations, but we always serialize them as their abstract type.
+                var t = baseType.GetGenericTypeDefinition();
+                if (t == typeof(FrozenDictionary<,>) || t == typeof(FrozenSet<>))
+                    actualType = baseType;
+            }
+
             Expression call;
             if (serializationManager._regularSerializerProvider.TryGetTypeSerializer(typeof(ITypeWriter<>), actualType, out var serializer))
             {
@@ -92,21 +100,41 @@ public sealed partial class SerializationManager
             }
             else if (actualType.IsEnum)
             {
-                // Enums implement IConvertible.
-                // Need it for the culture overload.
-                call = Expression.Call(
-                    instanceParam,
-                    nameof(WriteConvertible),
-                    Type.EmptyTypes,
-                    Expression.Convert(objParam, typeof(IConvertible)));
+                // When writing generic enums, we want to use the enum serializer.
+                // Otherwise, we fall back to the default IConvertible behaviour.
+
+                if (baseType != typeof(Enum) ||
+                    !serializationManager._regularSerializerProvider.TryGetTypeSerializer(typeof(ITypeWriter<>),
+                        typeof(Enum), out serializer))
+                {
+                    call = Expression.Call(
+                        instanceParam,
+                        nameof(WriteConvertible),
+                        Type.EmptyTypes,
+                        Expression.Convert(objParam, typeof(IConvertible)));
+                }
+                else
+                {
+                    var serializerConst = Expression.Constant(serializer);
+                    call = Expression.Call(
+                        instanceParam,
+                        nameof(WriteValue),
+                        new []{typeof(Enum)},
+                        serializerConst,
+                        Expression.Convert(objParam, typeof(Enum)),
+                        alwaysWriteParam,
+                        contextParam,
+                        Expression.Constant(notNullableOverride)
+                    );
+                }
             }
             else if (actualType.IsArray)
             {
                 call = Expression.Call(
                     instanceParam,
                     nameof(WriteArray),
-                    Type.EmptyTypes,
-                    Expression.Convert(objParam, typeof(Array)),
+                    new []{ actualType.GetElementType()! },
+                    Expression.Convert(objParam, actualType),
                     alwaysWriteParam,
                     contextParam);
             }
@@ -173,7 +201,7 @@ public sealed partial class SerializationManager
         }
 
         var type = typeof(T);
-        if (type.IsAbstract || type.IsInterface)
+        if (!type.IsSealed) // abstract classes, virtual classes, and interfaces.
         {
             return (WriteGenericDelegate<T>)_writeGenericBaseDelegates.GetOrAdd((type, value!.GetType(), notNullableOverride),
                 static (tuple, manager) => ValueFactory(tuple.baseType, tuple.actualType, tuple.Item3, manager), this);
@@ -193,13 +221,13 @@ public sealed partial class SerializationManager
         return new ValueDataNode(obj.Serialize());
     }
 
-    private DataNode WriteArray(Array obj, bool alwaysWrite, ISerializationContext? context)
+    private DataNode WriteArray<TElement>(TElement[] obj, bool alwaysWrite, ISerializationContext? context)
     {
         var sequenceNode = new SequenceDataNode();
 
         foreach (var val in obj)
         {
-            var serializedVal = WriteValue(val.GetType(), val, alwaysWrite, context);
+            var serializedVal = WriteValue(val, alwaysWrite, context);
             sequenceNode.Add(serializedVal);
         }
 
@@ -232,7 +260,12 @@ public sealed partial class SerializationManager
             return ValueDataNode.Null();
         }
 
-        return GetOrCreateWriteGenericDelegate(value, notNullableOverride)(value, alwaysWrite, context);
+        var node = GetOrCreateWriteGenericDelegate(value, notNullableOverride)(value, alwaysWrite, context);
+
+        if (typeof(T) == typeof(object))
+            node.Tag = "!type:" + value.GetType().Name;
+
+        return node;
     }
 
     public DataNode WriteValue<T>(ITypeWriter<T> writer, T value, bool alwaysWrite = false,

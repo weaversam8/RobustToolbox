@@ -8,7 +8,7 @@ using Robust.UnitTesting.Server;
 namespace Robust.Benchmarks.EntityManager;
 
 [Virtual]
-public class AddRemoveComponentBenchmark
+public partial class AddRemoveComponentBenchmark
 {
     private ISimulation _simulation = default!;
     private IEntityManager _entityManager = default!;
@@ -26,9 +26,8 @@ public class AddRemoveComponentBenchmark
             .InitializeInstance();
 
         _entityManager = _simulation.Resolve<IEntityManager>();
-
-        var coords = new MapCoordinates(0, 0, new MapId(1));
-        _simulation.AddMap(coords.MapId);
+        var map = _simulation.CreateMap().Uid;
+        var coords = new EntityCoordinates(map, default);
 
         for (var i = 0; i < N; i++)
         {
@@ -48,7 +47,7 @@ public class AddRemoveComponentBenchmark
     }
 
     [ComponentProtoName("A")]
-    public sealed class A : Component
+    public sealed partial class A : Component
     {
     }
 }

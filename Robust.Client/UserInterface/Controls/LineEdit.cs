@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Text;
 using JetBrains.Annotations;
 using Robust.Client.Graphics;
+using Robust.Shared;
+using Robust.Shared.Configuration;
 using Robust.Shared.Input;
 using Robust.Shared.IoC;
 using Robust.Shared.Maths;
@@ -19,6 +22,8 @@ namespace Robust.Client.UserInterface.Controls
     public class LineEdit : Control
     {
         [Dependency] private readonly IClyde _clyde = default!;
+        [Dependency] private readonly IConfigurationManager _cfgManager = default!;
+        [Dependency] private readonly IGameTiming _timing = default!;
 
         private const float MouseScrollDelay = 0.001f;
 
@@ -27,6 +32,8 @@ namespace Robust.Client.UserInterface.Controls
         public const string StylePropertySelectionColor = "selection-color";
         public const string StyleClassLineEditNotEditable = "notEditable";
         public const string StylePseudoClassPlaceholder = "placeholder";
+
+        public StyleBox? StyleBoxOverride { get; set; }
 
         // It is assumed that these two positions are NEVER inside a surrogate pair in the text buffer.
         private int _cursorPosition;
@@ -43,7 +50,19 @@ namespace Robust.Client.UserInterface.Controls
         private bool _mouseSelectingText;
         private float _lastMousePosition;
 
-        private bool IsPlaceHolderVisible => string.IsNullOrEmpty(_text) && _placeHolder != null;
+        private TimeSpan? _lastClickTime;
+        private Vector2? _lastClickPosition;
+
+        // Keep track of the frame on which we got focus, so we can implement SelectAllOnFocus properly.
+        // Otherwise, there's no way to keep track of whether the KeyDown is the one that focused the text box,
+        // to avoid text selection stomping on the behavior.
+        // This isn't a great way to do it.
+        // A better fix would be to annotate all input events with some unique sequence ID,
+        // and expose the input event that focused the control in KeyboardFocusEntered.
+        // But that sounds like a refactor I'm not doing today.
+        private uint _focusedOnFrame;
+
+        private bool IsPlaceHolderVisible => !(HidePlaceHolderOnFocus && HasKeyboardFocus()) && string.IsNullOrEmpty(_text) && _placeHolder != null;
 
         public event Action<LineEditEventArgs>? OnTextChanged;
         public event Action<LineEditEventArgs>? OnTextEntered;
@@ -93,6 +112,11 @@ namespace Robust.Client.UserInterface.Controls
             _updatePseudoClass();
             if (invokeEvent)
                 OnTextChanged?.Invoke(new LineEditEventArgs(this, _text));
+        }
+
+        public void ForceSubmitText()
+        {
+            OnTextEntered?.Invoke(new LineEditEventArgs(this, _text));
         }
 
         /// <summary>
@@ -171,7 +195,14 @@ namespace Robust.Client.UserInterface.Controls
         public int SelectionLower => Math.Min(_selectionStart, _cursorPosition);
         public int SelectionUpper => Math.Max(_selectionStart, _cursorPosition);
 
+        public bool HidePlaceHolderOnFocus { get; set; }
+
         public bool IgnoreNext { get; set; }
+
+        /// <summary>
+        /// If true, all the text in the LineEdit will be automatically selected whenever it is focused.
+        /// </summary>
+        public bool SelectAllOnFocus { get; set; }
 
         private (int start, int length)? _imeData;
 
@@ -258,7 +289,7 @@ namespace Robust.Client.UserInterface.Controls
             if (_mouseSelectingText)
             {
                 var style = _getStyleBox();
-                var contentBox = style.GetContentBox(PixelSizeBox);
+                var contentBox = style.GetContentBox(PixelSizeBox, UIScale);
 
                 if (_lastMousePosition < contentBox.Left)
                 {
@@ -280,16 +311,14 @@ namespace Robust.Client.UserInterface.Controls
         {
             var font = _getFont();
             var style = _getStyleBox();
-            return new Vector2(0, font.GetHeight(UIScale) / UIScale) + style.MinimumSize / UIScale;
+            return new Vector2(0, font.GetHeight(1.0f)) + style.MinimumSize;
         }
 
         protected override Vector2 ArrangeOverride(Vector2 finalSize)
         {
             var style = _getStyleBox();
-
-            _renderBox.ArrangePixel(
-                (UIBox2i) style.GetContentBox(
-                    UIBox2.FromDimensions(Vector2.Zero, finalSize * UIScale)));
+            var box = UIBox2.FromDimensions(Vector2.Zero, finalSize);
+            _renderBox.Arrange(style.GetContentBox(box, 1));
 
             return finalSize;
         }
@@ -606,7 +635,7 @@ namespace Robust.Client.UserInterface.Controls
                 {
                     if (Editable)
                     {
-                        OnTextEntered?.Invoke(new LineEditEventArgs(this, _text));
+                        ForceSubmitText();
                     }
 
                     args.Handle();
@@ -679,8 +708,26 @@ namespace Robust.Client.UserInterface.Controls
                     args.Handle();
                 }
             }
-            else
+            // Double-clicking. Clicks delay should be <= 250ms and the distance < 10 pixels.
+            else if (args.Function == EngineKeyFunctions.UIClick && _lastClickPosition != null && _lastClickTime != null
+                     && _timing.RealTime - _lastClickTime <= TimeSpan.FromMilliseconds(_cfgManager.GetCVar(CVars.DoubleClickDelay))
+                     && (_lastClickPosition.Value - args.PointerLocation.Position).IsShorterThan(_cfgManager.GetCVar(CVars.DoubleClickRange)))
             {
+                _lastClickTime = _timing.RealTime;
+                _lastClickPosition = args.PointerLocation.Position;
+
+                _lastMousePosition = args.RelativePosition.X;
+
+                _selectionStart = TextEditShared.PrevWordPosition(_text, GetIndexAtPos(args.RelativePosition.X));
+                _cursorPosition = TextEditShared.EndWordPosition(_text, GetIndexAtPos(args.RelativePosition.X));
+
+                args.Handle();
+            }
+            else if (!(SelectAllOnFocus && _focusedOnFrame == _timing.CurFrame))
+            {
+                _lastClickTime = _timing.RealTime;
+                _lastClickPosition = args.PointerLocation.Position;
+
                 _mouseSelectingText = true;
                 _lastMousePosition = args.RelativePosition.X;
 
@@ -747,7 +794,7 @@ namespace Robust.Client.UserInterface.Controls
         private int GetIndexAtPos(float horizontalPos)
         {
             var style = _getStyleBox();
-            var contentBox = style.GetContentBox(PixelSizeBox);
+            var contentBox = style.GetContentBox(PixelSizeBox, UIScale);
 
             var clickPosX = horizontalPos * UIScale;
 
@@ -804,7 +851,7 @@ namespace Robust.Client.UserInterface.Controls
         public float GetOffsetAtIndex(int index)
         {
             var style = _getStyleBox();
-            var contentBox = style.GetContentBox(PixelSizeBox);
+            var contentBox = style.GetContentBox(PixelSizeBox, UIScale);
 
             var font = _getFont();
             var i = 0;
@@ -833,7 +880,14 @@ namespace Robust.Client.UserInterface.Controls
 
             if (Editable)
             {
-                _clyde.TextInputStart();
+                Root?.Window?.TextInputStart();
+            }
+
+            _focusedOnFrame = _timing.CurFrame;
+            if (SelectAllOnFocus)
+            {
+                CursorPosition = _text.Length;
+                SelectionStart = 0;
             }
         }
 
@@ -843,7 +897,8 @@ namespace Robust.Client.UserInterface.Controls
 
             OnFocusExit?.Invoke(new LineEditEventArgs(this, _text));
 
-            _clyde.TextInputStop();
+            Root?.Window?.TextInputStop();
+
             AbortIme(delete: false);
         }
 
@@ -861,6 +916,11 @@ namespace Robust.Client.UserInterface.Controls
         [Pure]
         private StyleBox _getStyleBox()
         {
+            if (StyleBoxOverride != null)
+            {
+                return StyleBoxOverride;
+            }
+
             if (TryGetStyleProperty<StyleBox>(StylePropertyStyleBox, out var box))
             {
                 return box;
@@ -889,7 +949,7 @@ namespace Robust.Client.UserInterface.Controls
         {
             base.Draw(handle);
 
-            _getStyleBox().Draw(handle, PixelSizeBox);
+            _getStyleBox().Draw(handle, PixelSizeBox, UIScale);
         }
 
         public sealed class LineEditEventArgs : EventArgs
@@ -1086,15 +1146,16 @@ namespace Robust.Client.UserInterface.Controls
                             contentBox.Bottom),
                         cursorColor);
 
+                    if (Root?.Window is { } window)
                     {
                         // Update IME position.
                         var imeBox = new UIBox2(
-                            actualCursorPosition,
+                            contentBox.Left,
                             contentBox.Top,
                             contentBox.Right,
                             contentBox.Bottom);
 
-                        _master._clyde.TextInputSetRect((UIBox2i) imeBox.Translated(GlobalPixelPosition));
+                        window.TextInputSetRect((UIBox2i) imeBox.Translated(GlobalPixelPosition), actualCursorPosition);
                     }
                 }
 

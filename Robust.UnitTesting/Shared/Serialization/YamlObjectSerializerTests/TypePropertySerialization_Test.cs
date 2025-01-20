@@ -10,8 +10,6 @@ using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Serialization.Markdown.Value;
 using YamlDotNet.RepresentationModel;
 
-// ReSharper disable AccessToStaticMemberViaDerivedType
-
 namespace Robust.UnitTesting.Shared.Serialization.YamlObjectSerializerTests
 {
     [TestFixture]
@@ -34,13 +32,13 @@ namespace Robust.UnitTesting.Shared.Serialization.YamlObjectSerializerTests
             var serMan = IoCManager.Resolve<ISerializationManager>();
             var mapping = (MappingDataNode) serMan.WriteValue(type, notNullableOverride: true);
 
-            Assert.IsNotEmpty(mapping.Children);
+            Assert.That(mapping.Children, Is.Not.Empty);
 
             var testPropertyOne = mapping.Get("testPropertyOne") as ValueDataNode;
             var testPropertyTwo = mapping.Get("testPropertyTwo") as ValueDataNode;
 
-            Assert.NotNull(testPropertyOne);
-            Assert.NotNull(testPropertyTwo);
+            Assert.That(testPropertyOne, Is.Not.Null);
+            Assert.That(testPropertyTwo, Is.Not.Null);
             Assert.That(testPropertyOne!.Value, Is.EqualTo("B"));
             Assert.That(testPropertyTwo!.Value, Is.EqualTo("10"));
         }
@@ -71,8 +69,8 @@ namespace Robust.UnitTesting.Shared.Serialization.YamlObjectSerializerTests
             var serMan = IoCManager.Resolve<ISerializationManager>();
             var type = serMan.Read<ITestType>(mapping["test"].ToDataNode(), notNullableOverride: true);
 
-            Assert.NotNull(type);
-            Assert.IsInstanceOf<TestTypeTwo>(type);
+            Assert.That(type, Is.Not.Null);
+            Assert.That(type, Is.InstanceOf<TestTypeTwo>());
 
             var testTypeTwo = (TestTypeTwo) type!;
 
@@ -83,7 +81,7 @@ namespace Robust.UnitTesting.Shared.Serialization.YamlObjectSerializerTests
 
     [SerializedType("testtype2")]
     [DataDefinition]
-    public sealed class TestTypeTwo : ITestType
+    public sealed partial class TestTypeTwo : ITestType
     {
         [DataField("testPropertyOne")]
         public string? TestPropertyOne { get; set; }
@@ -93,7 +91,7 @@ namespace Robust.UnitTesting.Shared.Serialization.YamlObjectSerializerTests
     }
 
     [RegisterComponent]
-    public sealed class TestComponent : Component
+    public sealed partial class TestComponent : Component
     {
         [DataField("testType")] public ITestType? TestType { get; set; }
     }

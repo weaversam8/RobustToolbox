@@ -1,5 +1,7 @@
-﻿using Robust.Shared.GameObjects;
+﻿using System.Numerics;
+using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
+using Robust.Shared.Map.Components;
 
 namespace Robust.Client.Placement.Modes
 {
@@ -19,7 +21,7 @@ namespace Robust.Client.Placement.Modes
 
             if (gridIdOpt is EntityUid gridId && gridId.IsValid())
             {
-                var mapGrid = pManager.MapManager.GetGrid(gridId);
+                var mapGrid = pManager.EntityManager.GetComponent<MapGridComponent>(gridId);
                 tileSize = mapGrid.TileSize; //convert from ushort to float
             }
 
@@ -29,12 +31,12 @@ namespace Robust.Client.Placement.Modes
             if (pManager.CurrentPermission!.IsTile)
             {
                 MouseCoords = new EntityCoordinates(MouseCoords.EntityId,
-                    (CurrentTile.X + tileSize / 2, CurrentTile.Y + tileSize / 2));
+                    new Vector2(CurrentTile.X + tileSize / 2, CurrentTile.Y + tileSize / 2));
             }
             else
             {
                 MouseCoords = new EntityCoordinates(MouseCoords.EntityId,
-                    (CurrentTile.X + tileSize / 2 + pManager.PlacementOffset.X,
+                    new Vector2(CurrentTile.X + tileSize / 2 + pManager.PlacementOffset.X,
                         CurrentTile.Y + tileSize / 2 + pManager.PlacementOffset.Y));
             }
         }

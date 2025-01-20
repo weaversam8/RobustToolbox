@@ -9,37 +9,32 @@ namespace Robust.Shared.Map.Components
 {
     [RegisterComponent]
     [NetworkedComponent]
-    public sealed class MapComponent : Component
+    public sealed partial class MapComponent : Component
     {
         [ViewVariables(VVAccess.ReadWrite)]
-        [DataField(("lightingEnabled"))]
+        [DataField]
         public bool LightingEnabled { get; set; } = true;
 
         [ViewVariables(VVAccess.ReadOnly)]
         public MapId MapId { get; internal set; } = MapId.Nullspace;
 
-        [ViewVariables(VVAccess.ReadOnly)]
-        public bool MapPaused { get; set; } = false;
+        [DataField, Access(typeof(SharedMapSystem), typeof(MapManager))]
+        public bool MapPaused;
 
-        [ViewVariables(VVAccess.ReadOnly)]
-        public bool MapPreInit { get; set; } = false;
+        [DataField, Access(typeof(SharedMapSystem), typeof(MapManager))]
+        public bool MapInitialized;
     }
 
     /// <summary>
     ///     Serialized state of a <see cref="MapGridComponentState"/>.
     /// </summary>
     [Serializable, NetSerializable]
-    public sealed class MapComponentState : ComponentState
+    public sealed class MapComponentState(MapId mapId, bool lightingEnabled, bool paused, bool init)
+        : ComponentState
     {
-        public MapId MapId;
-        public bool LightingEnabled;
-        public bool MapPaused;
-
-        public MapComponentState(MapId mapId, bool lightingEnabled, bool paused)
-        {
-            MapId = mapId;
-            LightingEnabled = lightingEnabled;
-            MapPaused = paused;
-        }
+        public MapId MapId = mapId;
+        public bool LightingEnabled = lightingEnabled;
+        public bool MapPaused = paused;
+        public bool Initialized = init;
     }
 }

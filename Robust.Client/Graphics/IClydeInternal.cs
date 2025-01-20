@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using Robust.Client.Input;
+using Robust.Client.ResourceManagement;
 using Robust.Client.UserInterface;
+using Robust.Shared.Graphics;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
 using Robust.Shared.Timing;
@@ -40,8 +42,7 @@ namespace Robust.Client.Graphics
         /// <summary>
         ///     Creates a new instance of a shader.
         /// </summary>
-        /// <param name="handle">The handle of the loaded shader as returned by <see cref="LoadShader"/>.</param>
-        ShaderInstance InstanceShader(ClydeHandle handle);
+        ShaderInstance InstanceShader(ShaderSourceResource handle, bool? light = null, ShaderBlendMode? blend = null);
 
         /// <summary>
         ///     This is purely a hook for <see cref="IInputManager"/>, use that instead.
@@ -65,6 +66,10 @@ namespace Robust.Client.Graphics
 
         void RegisterGridEcsEvents();
 
+        void ShutdownGridEcsEvents();
+
         void RunOnWindowThread(Action action);
+
+        IFileDialogManager? FileDialogImpl { get; }
     }
 }

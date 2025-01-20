@@ -1,4 +1,3 @@
-using System;
 using BenchmarkDotNet.Attributes;
 using JetBrains.Annotations;
 using Robust.Shared.Analyzers;
@@ -9,7 +8,7 @@ using Robust.UnitTesting.Server;
 namespace Robust.Benchmarks.EntityManager;
 
 [Virtual]
-public class GetComponentBenchmark
+public partial class GetComponentBenchmark
 {
     private ISimulation _simulation = default!;
     private IEntityManager _entityManager = default!;
@@ -32,8 +31,8 @@ public class GetComponentBenchmark
 
         Comps = new A[N+2];
 
-        var coords = new MapCoordinates(0, 0, new MapId(1));
-        _simulation.AddMap(coords.MapId);
+        var map = _simulation.CreateMap().Uid;
+        var coords = new EntityCoordinates(map, default);
 
         for (var i = 0; i < N; i++)
         {
@@ -55,7 +54,7 @@ public class GetComponentBenchmark
     }
 
     [ComponentProtoName("A")]
-    public sealed class A : Component
+    public sealed partial class A : Component
     {
     }
 }

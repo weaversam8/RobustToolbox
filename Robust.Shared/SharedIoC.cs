@@ -1,5 +1,6 @@
 using Robust.Shared.Asynchronous;
 using Robust.Shared.Configuration;
+using Robust.Shared.Console;
 using Robust.Shared.ContentPack;
 using Robust.Shared.Exceptions;
 using Robust.Shared.GameObjects;
@@ -17,6 +18,7 @@ using Robust.Shared.Serialization;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Threading;
 using Robust.Shared.Timing;
+using Robust.Shared.Toolshed;
 
 namespace Robust.Shared
 {
@@ -46,6 +48,10 @@ namespace Robust.Shared
             deps.Register<IVerticesSimplifier, RamerDouglasPeuckerSimplifier>();
             deps.Register<IParallelManager, ParallelManager>();
             deps.Register<IParallelManagerInternal, ParallelManager>();
+            deps.Register<ToolshedManager>();
+            deps.Register<HttpClientHolder>();
+            deps.Register<RobustMemoryManager>();
+            deps.Register<EntityConsoleHost>();
         }
     }
 }

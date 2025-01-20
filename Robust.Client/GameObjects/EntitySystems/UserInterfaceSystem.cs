@@ -1,53 +1,38 @@
-using JetBrains.Annotations;
-using Robust.Client.Player;
 using Robust.Shared.GameObjects;
-using Robust.Shared.IoC;
+using Robust.Shared.Prototypes;
 
-namespace Robust.Client.GameObjects
+namespace Robust.Client.GameObjects;
+
+public sealed class UserInterfaceSystem : SharedUserInterfaceSystem
 {
-    [UsedImplicitly]
-    public sealed class UserInterfaceSystem : SharedUserInterfaceSystem
+    public override void Initialize()
     {
-        [Dependency] private readonly IPlayerManager _playerManager = default!;
+        base.Initialize();
+        ProtoManager.PrototypesReloaded += OnProtoReload;
+    }
 
-        public override void Initialize()
+    public override void Shutdown()
+    {
+        base.Shutdown();
+        ProtoManager.PrototypesReloaded -= OnProtoReload;
+    }
+
+    private void OnProtoReload(PrototypesReloadedEventArgs obj)
+    {
+        var player = Player.LocalEntity;
+
+        if (!UserQuery.TryComp(player, out var userComp))
+            return;
+
+        foreach (var uid in userComp.OpenInterfaces.Keys)
         {
-            base.Initialize();
+            if (!UIQuery.TryComp(uid, out var uiComp))
+                continue;
 
-            SubscribeNetworkEvent<BoundUIWrapMessage>(MessageReceived);
-            SubscribeLocalEvent<ClientUserInterfaceComponent, ComponentShutdown>(OnUserInterfaceShutdown);
-        }
-
-        private void OnUserInterfaceShutdown(EntityUid uid, ClientUserInterfaceComponent component, ComponentShutdown args)
-        {
-            foreach (var bui in component.Interfaces)
+            foreach (var bui in uiComp.ClientOpenInterfaces.Values)
             {
-                bui.Dispose();
+                bui.OnProtoReload(obj);
             }
-        }
-
-        private void MessageReceived(BoundUIWrapMessage ev)
-        {
-            var uid = ev.Entity;
-            if (!EntityManager.TryGetComponent<ClientUserInterfaceComponent>(uid, out var cmp))
-                return;
-
-            var message = ev.Message;
-            // This should probably not happen at this point, but better make extra sure!
-            if(_playerManager.LocalPlayer != null)
-                message.Session = _playerManager.LocalPlayer.Session;
-            message.Entity = uid;
-            message.UiKey = ev.UiKey;
-
-            // Raise as object so the correct type is used.
-            RaiseLocalEvent(uid, (object)message, true);
-
-            cmp.MessageReceived(ev);
-        }
-
-        internal void Send(BoundUIWrapMessage msg)
-        {
-            RaiseNetworkEvent(msg);
         }
     }
 }

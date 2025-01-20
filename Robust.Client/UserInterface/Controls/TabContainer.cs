@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Numerics;
 using Robust.Client.Graphics;
 using Robust.Shared.Input;
 using Robust.Shared.Localization;
@@ -20,6 +22,8 @@ namespace Robust.Client.UserInterface.Controls
 
         private int _currentTab;
         private bool _tabsVisible = true;
+        // The right-most coordinate of each tab header
+        private List<float> _tabRight = new();
 
         public int CurrentTab
         {
@@ -63,6 +67,10 @@ namespace Robust.Client.UserInterface.Controls
                 InvalidateMeasure();
             }
         }
+
+        public StyleBox? PanelStyleBoxOverride { get; set; }
+        public Color? TabFontColorOverride { get; set; }
+        public Color? TabFontColorInactiveOverride { get; set; }
 
         public event Action<int>? OnTabChanged;
 
@@ -142,7 +150,7 @@ namespace Robust.Client.UserInterface.Controls
             var panel = _getPanel();
             var panelBox = new UIBox2(0, headerSize, PixelWidth, PixelHeight);
 
-            panel?.Draw(handle, panelBox);
+            panel?.Draw(handle, panelBox, UIScale);
 
             var font = _getFont();
             var boxActive = _getTabBoxActive();
@@ -152,11 +160,14 @@ namespace Robust.Client.UserInterface.Controls
 
             var headerOffset = 0f;
 
+            _tabRight.Clear();
+
             // Then, draw the tabs.
             for (var i = 0; i < ChildCount; i++)
             {
                 if (!GetTabVisible(i))
                 {
+                    _tabRight.Add(headerOffset);
                     continue;
                 }
 
@@ -184,10 +195,10 @@ namespace Robust.Client.UserInterface.Controls
 
                 if (box != null)
                 {
-                    var drawBox = box.GetEnvelopBox(topLeft, size);
+                    var drawBox = box.GetEnvelopBox(topLeft, size, UIScale);
                     boxAdvance = drawBox.Width;
-                    box.Draw(handle, drawBox);
-                    contentBox = box.GetContentBox(drawBox);
+                    box.Draw(handle, drawBox, UIScale);
+                    contentBox = box.GetContentBox(drawBox, UIScale);
                 }
                 else
                 {
@@ -209,6 +220,8 @@ namespace Robust.Client.UserInterface.Controls
                 }
 
                 headerOffset += boxAdvance;
+                // Remember the right-most point of this tab, for testing clicked areas
+                _tabRight.Add(headerOffset);
             }
         }
 
@@ -218,11 +231,11 @@ namespace Robust.Client.UserInterface.Controls
 
             if (TabsVisible)
             {
-                headerSize = (0, _getHeaderSize() / UIScale);
+                headerSize = new Vector2(0, _getHeaderSize() / UIScale);
             }
 
             var panel = _getPanel();
-            var panelSize = (panel?.MinimumSize ?? Vector2.Zero) / UIScale;
+            var panelSize = (panel?.MinimumSize ?? Vector2.Zero);
 
             var contentsSize = availableSize - headerSize - panelSize;
 
@@ -232,7 +245,7 @@ namespace Robust.Client.UserInterface.Controls
                 if (child.Visible)
                 {
                     child.Measure(contentsSize);
-                    total = Vector2.ComponentMax(child.DesiredSize, total);
+                    total = Vector2.Max(child.DesiredSize, total);
                 }
             }
 
@@ -251,7 +264,7 @@ namespace Robust.Client.UserInterface.Controls
             var contentBox = new UIBox2i(0, headerSize, (int) (finalSize.X * UIScale), (int) (finalSize.Y * UIScale));
             if (panel != null)
             {
-                contentBox = (UIBox2i) panel.GetContentBox(contentBox);
+                contentBox = (UIBox2i) panel.GetContentBox(contentBox, UIScale);
             }
 
             var control = GetChild(_currentTab);
@@ -278,49 +291,21 @@ namespace Robust.Client.UserInterface.Controls
             args.Handle();
 
             var relX = args.RelativePixelPosition.X;
-
-            var font = _getFont();
-            var boxActive = _getTabBoxActive();
-            var boxInactive = _getTabBoxInactive();
-
-            var headerOffset = 0f;
-
+            float tabLeft = 0;
             for (var i = 0; i < ChildCount; i++)
             {
-                if (!GetTabVisible(i))
+                if (relX > tabLeft && relX <= _tabRight[i])
                 {
-                    continue;
-                }
-
-                var title = GetActualTabTitle(i);
-
-                var titleLength = 0;
-                // Get string length.
-                foreach (var rune in title.EnumerateRunes())
-                {
-                    if (!font.TryGetCharMetrics(rune, UIScale, out var metrics))
-                    {
-                        continue;
-                    }
-
-                    titleLength += metrics.Advance;
-                }
-
-                var active = _currentTab == i;
-                var box = active ? boxActive : boxInactive;
-                var boxAdvance = titleLength + box?.MinimumSize.X ?? 0;
-
-                if (headerOffset < relX && headerOffset + boxAdvance > relX)
-                {
-                    // Got em.
                     CurrentTab = i;
                     return;
                 }
 
-                headerOffset += boxAdvance;
+                // Next tab starts here
+                tabLeft = _tabRight[i];
             }
         }
 
+        // Returns the size of the header, in real pixels
         [System.Diagnostics.Contracts.Pure]
         private int _getHeaderSize()
         {
@@ -332,8 +317,8 @@ namespace Robust.Client.UserInterface.Controls
                 var inactive = _getTabBoxInactive();
                 var font = _getFont();
 
-                var activeSize = active?.MinimumSize ?? Vector2.Zero;
-                var inactiveSize = inactive?.MinimumSize ?? Vector2.Zero;
+                var activeSize = (active?.MinimumSize ?? Vector2.Zero) * UIScale;
+                var inactiveSize = (inactive?.MinimumSize ?? Vector2.Zero) * UIScale;
 
                 headerSize = (int) MathF.Max(activeSize.Y, inactiveSize.Y);
                 headerSize += font.GetHeight(UIScale);
@@ -359,6 +344,9 @@ namespace Robust.Client.UserInterface.Controls
         [System.Diagnostics.Contracts.Pure]
         private Color _getTabFontColorActive()
         {
+            if (TabFontColorOverride != null)
+                return TabFontColorOverride.Value;
+
             if (TryGetStyleProperty(stylePropertyTabFontColor, out Color color))
             {
                 return color;
@@ -369,6 +357,9 @@ namespace Robust.Client.UserInterface.Controls
         [System.Diagnostics.Contracts.Pure]
         private Color _getTabFontColorInactive()
         {
+            if (TabFontColorInactiveOverride != null)
+                return TabFontColorInactiveOverride.Value;
+
             if (TryGetStyleProperty(StylePropertyTabFontColorInactive, out Color color))
             {
                 return color;
@@ -379,6 +370,9 @@ namespace Robust.Client.UserInterface.Controls
         [System.Diagnostics.Contracts.Pure]
         private StyleBox? _getPanel()
         {
+            if (PanelStyleBoxOverride != null)
+                return PanelStyleBoxOverride;
+
             TryGetStyleProperty<StyleBox>(StylePropertyPanelStyleBox, out var box);
             return box;
         }

@@ -1,3 +1,4 @@
+using System.Numerics;
 using Robust.Shared.ComponentTrees;
 using Robust.Shared.GameStates;
 using Robust.Shared.Maths;
@@ -52,19 +53,19 @@ public abstract class OccluderSystem : ComponentTreeSystem<OccluderTreeComponent
             return;
 
         comp.BoundingBox = box;
-        Dirty(comp);
+        Dirty(uid, comp);
 
         if (comp.TreeUid != null)
             QueueTreeUpdate(uid, comp);
     }
 
-    public virtual void SetEnabled(EntityUid uid, bool enabled, OccluderComponent? comp = null)
+    public virtual void SetEnabled(EntityUid uid, bool enabled, OccluderComponent? comp = null, MetaDataComponent? meta = null)
     {
         if (!Resolve(uid, ref comp, false) || enabled == comp.Enabled)
             return;
 
         comp.Enabled = enabled;
-        Dirty(comp);
+        Dirty(uid, comp, meta);
         QueueTreeUpdate(uid, comp);
     }
     #endregion

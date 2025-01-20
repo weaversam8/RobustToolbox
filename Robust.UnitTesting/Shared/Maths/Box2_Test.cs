@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Numerics;
 using NUnit.Framework;
 using Robust.Shared.Maths;
 
@@ -63,6 +64,25 @@ namespace Robust.UnitTesting.Shared.Maths
             5.0f,
             10.0f
         };
+
+        private static TestCaseData[] MatrixCases = new[]
+        {
+            new TestCaseData(Matrix3x2.Identity,
+                Box2.UnitCentered,
+                Box2.UnitCentered),
+            new TestCaseData(Matrix3x2.CreateRotation(MathF.PI),
+                Box2.UnitCentered,
+                new Box2(new Vector2(-0.5f, -0.5f), new Vector2(0.5f, 0.5f))),
+            new TestCaseData(Matrix3x2.CreateTranslation(Vector2.One),
+                Box2.UnitCentered,
+                new Box2(new Vector2(0.5f, 0.5f), new Vector2(1.5f, 1.5f))),
+        };
+
+        [Test, TestCaseSource(nameof(MatrixCases))]
+        public void TestBox2Matrices(Matrix3x2 matrix, Box2 bounds, Box2 result)
+        {
+            Assert.That(matrix.TransformBox(bounds), Is.EqualTo(result));
+        }
 
         /// <summary>
         ///     Check whether the sources list has correct data.

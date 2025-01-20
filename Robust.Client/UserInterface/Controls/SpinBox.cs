@@ -1,6 +1,6 @@
-using Robust.Shared.Maths;
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 
 namespace Robust.Client.UserInterface.Controls
 {
@@ -13,10 +13,11 @@ namespace Robust.Client.UserInterface.Controls
         public const string LeftButtonStyle = "spinbox-left";
         public const string RightButtonStyle = "spinbox-right";
         public const string MiddleButtonStyle = "spinbox-middle";
-        private LineEdit _lineEdit;
-        private List<Button> _leftButtons = new();
-        private List<Button> _rightButtons = new();
+        public LineEdit LineEditControl { get; }
+        private List<SpinBoxButton> _leftButtons = new();
+        private List<SpinBoxButton> _rightButtons = new();
         private int _stepSize = 1;
+        private bool _buttonsDisabled;
 
         /// <summary>
         ///     Determines whether the SpinBox value gets changed by the input text.
@@ -29,12 +30,7 @@ namespace Robust.Client.UserInterface.Controls
             get => _value;
             set
             {
-                if (IsValid != null && !IsValid(value))
-                {
-                    return;
-                }
-                _value = value;
-                _lineEdit.Text = value.ToString();
+                OverrideValue(value);
                 ValueChanged?.Invoke(new ValueChangedEventArgs(value));
             }
         }
@@ -51,7 +47,8 @@ namespace Robust.Client.UserInterface.Controls
                 return;
             }
             _value = value;
-            _lineEdit.Text = value.ToString();
+            UpdateButtonCanPress();
+            LineEditControl.Text = value.ToString();
         }
 
         public event Action<ValueChangedEventArgs>? ValueChanged;
@@ -61,17 +58,17 @@ namespace Robust.Client.UserInterface.Controls
             Orientation = LayoutOrientation.Horizontal;
             MouseFilter = MouseFilterMode.Pass;
 
-            _lineEdit = new LineEdit
+            LineEditControl = new LineEdit
             {
                 MinSize = new Vector2(40, 0),
                 HorizontalExpand = true
             };
-            AddChild(_lineEdit);
+            AddChild(LineEditControl);
 
             Value = 0;
 
-            _lineEdit.IsValid = (str) => int.TryParse(str, out var i) && (IsValid == null || IsValid(i));
-            _lineEdit.OnTextChanged += (args) =>
+            LineEditControl.IsValid = (str) => int.TryParse(str, out var i) && (IsValid == null || IsValid(i));
+            LineEditControl.OnTextChanged += (args) =>
             {
                 if (int.TryParse(args.Text, out int i))
                     Value = i;
@@ -86,6 +83,7 @@ namespace Robust.Client.UserInterface.Controls
             ClearButtons();
             AddLeftButton(-1, "-");
             AddRightButton(1, "+");
+            UpdateButtonCanPress();
         }
 
         /// <summary>
@@ -93,8 +91,8 @@ namespace Robust.Client.UserInterface.Controls
         /// </summary>
         public void AddRightButton(int num, string text)
         {
-            var button = new Button { Text = text };
-            button.OnPressed += (args) => Value += num;
+            var button = new SpinBoxButton(num) { Text = text };
+            button.OnPressed += _ => Value += num;
             AddChild(button);
             button.AddStyleClass(RightButtonStyle);
             if (_rightButtons.Count > 0)
@@ -110,8 +108,8 @@ namespace Robust.Client.UserInterface.Controls
         /// </summary>
         public void AddLeftButton(int num, string text)
         {
-            var button = new Button { Text = text };
-            button.OnPressed += (args) => Value += num;
+            var button = new SpinBoxButton(num) { Text = text };
+            button.OnPressed += _ => Value += num;
             AddChild(button);
             button.SetPositionInParent(_leftButtons.Count);
             button.AddStyleClass(_leftButtons.Count == 0 ? LeftButtonStyle : MiddleButtonStyle);
@@ -129,11 +127,11 @@ namespace Robust.Client.UserInterface.Controls
             ClearButtons();
             foreach (var num in leftButtons)
             {
-                AddLeftButton(num, num.ToString());
+                AddLeftButton(num, num.ToString("+#;-#;0"));
             }
             foreach (var num in rightButtons)
             {
-                AddRightButton(num, num.ToString());
+                AddRightButton(num, num.ToString("+#;-#;0"));
             }
         }
 
@@ -142,8 +140,8 @@ namespace Robust.Client.UserInterface.Controls
         /// </summary>
         public bool LineEditDisabled
         {
-            get => !_lineEdit.Editable;
-            set => _lineEdit.Editable = !value;
+            get => !LineEditControl.Editable;
+            set => LineEditControl.Editable = !value;
         }
 
         /// <summary>
@@ -160,6 +158,24 @@ namespace Robust.Client.UserInterface.Controls
             foreach (var rightButton in _rightButtons)
             {
                 rightButton.Disabled = disabled;
+            }
+
+            _buttonsDisabled = disabled;
+        }
+
+        private void UpdateButtonCanPress()
+        {
+            if (IsValid == null)
+                return;
+
+            foreach (var button in _leftButtons)
+            {
+                button.Disabled = !IsValid(_value + button.Value) || _buttonsDisabled;
+            }
+
+            foreach (var button in _rightButtons)
+            {
+                button.Disabled = !IsValid(_value + button.Value) || _buttonsDisabled;
             }
         }
 
@@ -184,7 +200,7 @@ namespace Robust.Client.UserInterface.Controls
         {
             base.MouseWheel(args);
 
-            if (!_lineEdit.HasKeyboardFocus())
+            if (!LineEditControl.HasKeyboardFocus())
             {
                 return;
             }
@@ -193,6 +209,16 @@ namespace Robust.Client.UserInterface.Controls
                 Value += _stepSize;
             else if (args.Delta.Y < 0)
                 Value -= _stepSize;
+        }
+
+        private sealed class SpinBoxButton : Button
+        {
+            public readonly int Value;
+
+            public SpinBoxButton(int value)
+            {
+                Value = value;
+            }
         }
     }
 

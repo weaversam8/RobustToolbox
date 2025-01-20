@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Numerics;
 using Robust.Client.GameObjects;
 using Robust.Client.Graphics;
 using Robust.Shared.GameObjects;
@@ -12,41 +14,41 @@ namespace Robust.Client.UserInterface.Controls
     [Virtual]
     public class SpriteView : Control
     {
-        private SpriteSystem? _spriteSystem;
-        IEntityManager _entMan;
+        protected SpriteSystem? SpriteSystem;
+        private SharedTransformSystem? _transform;
+        protected readonly IEntityManager EntMan;
 
         [ViewVariables]
-        private SpriteComponent? _sprite;
-        public SpriteComponent? Sprite
-        {
-            get => _sprite;
-            [Obsolete("Use SetEntity()")]
-            set => SetEntity(value?.Owner);
-        }
-
+        public SpriteComponent? Sprite => Entity?.Comp1;
 
         [ViewVariables]
-        public EntityUid? Entity { get; private set; }
+        public Entity<SpriteComponent, TransformComponent>? Entity { get; private set; }
+
+        [ViewVariables]
+        public NetEntity? NetEnt { get; private set; }
 
         /// <summary>
-        /// If true this will scale the sprite up or down to fit within the control's actual size.
+        /// This field configures automatic scaling of the sprite. This automatic scaling is done before
+        /// applying the explicitly set scale <see cref="SpriteView.Scale"/>.
         /// </summary>
         public StretchMode Stretch  { get; set; } = StretchMode.Fit;
 
         public enum StretchMode
         {
             /// <summary>
-            /// Don't scale the sprite at all.
+            /// Don't automatically scale the sprite. The sprite can still be scaled via <see cref="SpriteView.Scale"/>
             /// </summary>
             None,
 
             /// <summary>
-            /// Scales the sprite down so that it fits within the control. Does not scale the sprite up.
+            /// Scales the sprite down so that it fits within the control. Does not scale the sprite up. Keeps the same
+            /// aspect ratio. This automatic scaling is done before applying <see cref="SpriteView.Scale"/>.
             /// </summary>
             Fit,
 
             /// <summary>
-            ///  Scale the sprite so that it fills the whole control.
+            /// Scale the sprite up or down so that it fills the whole control. Keeps the same aspect ratio. This
+            /// automatic scaling is done before applying <see cref="SpriteView.Scale"/>.
             /// </summary>
             Fill
         }
@@ -118,15 +120,56 @@ namespace Robust.Client.UserInterface.Controls
 
         public SpriteView()
         {
-            _entMan = IoCManager.Resolve<IEntityManager>();
-            _entMan.TryGetComponent(Entity, out _sprite);
+            IoCManager.Resolve(ref EntMan);
             RectClipContent = true;
+        }
+
+        public SpriteView(IEntityManager entMan)
+        {
+            EntMan = entMan;
+            RectClipContent = true;
+        }
+
+        public SpriteView(EntityUid? uid, IEntityManager entMan)
+        {
+            EntMan = entMan;
+            RectClipContent = true;
+            SetEntity(uid);
+        }
+
+        public SpriteView(NetEntity uid, IEntityManager entMan)
+        {
+            EntMan = entMan;
+            RectClipContent = true;
+            SetEntity(uid);
+        }
+
+        public void SetEntity(NetEntity netEnt)
+        {
+            if (netEnt == NetEnt)
+                return;
+
+            // The Entity is getting set later in the ResolveEntity method
+            // because the client may not have received it yet.
+            Entity = null;
+            NetEnt = netEnt;
         }
 
         public void SetEntity(EntityUid? uid)
         {
-            Entity = uid;
-            _entMan.TryGetComponent(Entity, out _sprite);
+            if (Entity?.Owner == uid)
+                return;
+
+            if (!EntMan.TryGetComponent(uid, out SpriteComponent? sprite)
+                || !EntMan.TryGetComponent(uid, out TransformComponent? xform))
+            {
+                Entity = null;
+                NetEnt = null;
+                return;
+            }
+
+            Entity = new(uid.Value, sprite, xform);
+            NetEnt = EntMan.GetNetEntity(uid);
         }
 
         protected override Vector2 MeasureOverride(Vector2 availableSize)
@@ -138,13 +181,10 @@ namespace Robust.Client.UserInterface.Controls
 
         private void UpdateSize()
         {
-            if (Entity == null || _sprite == null)
-            {
-                _spriteSize = default;
+            if (!ResolveEntity(out _, out var sprite, out _))
                 return;
-            }
 
-            var spriteBox = _sprite.CalculateRotatedBoundingBox(default,  _worldRotation ?? Angle.Zero, _eyeRotation)
+            var spriteBox = sprite.CalculateRotatedBoundingBox(default,  _worldRotation ?? Angle.Zero, _eyeRotation)
                 .CalcBoundingBox();
 
             if (!SpriteOffset)
@@ -160,10 +200,10 @@ namespace Robust.Client.UserInterface.Controls
 
             // This view will be centered on (0,0). If the sprite was shifted by (1,2) the actual size of the control
             // would need to be at least (2,4).
-            tr = Vector2.ComponentMax(tr, Vector2.Zero);
-            bl = Vector2.ComponentMin(bl, Vector2.Zero);
-            tr = Vector2.ComponentMax(tr, -bl);
-            bl = Vector2.ComponentMin(bl, -tr);
+            tr = Vector2.Max(tr, Vector2.Zero);
+            bl = Vector2.Min(bl, Vector2.Zero);
+            tr = Vector2.Max(tr, -bl);
+            bl = Vector2.Min(bl, -tr);
             var box = new Box2(bl, tr);
 
             DebugTools.Assert(box.Contains(Vector2.Zero));
@@ -186,33 +226,57 @@ namespace Robust.Client.UserInterface.Controls
 
         internal override void DrawInternal(IRenderHandle renderHandle)
         {
-            if (Entity is not {} uid || _sprite == null)
+            if (!ResolveEntity(out var uid, out var sprite, out var xform))
                 return;
 
-            if (_sprite.Deleted)
-            {
-                SetEntity(null);
-                return;
-            }
+            SpriteSystem ??= EntMan.System<SpriteSystem>();
+            _transform ??= EntMan.System<TransformSystem>();
 
             // Ensure the sprite is animated despite possible not being visible in any viewport.
-            _spriteSystem ??= _entMan.System<SpriteSystem>();
-            _spriteSystem.ForceUpdate(uid);
+            SpriteSystem.ForceUpdate(uid);
 
-            var stretch = Stretch switch
+            var stretchVec = Stretch switch
             {
-                StretchMode.Fit => Vector2.ComponentMin(Size / _spriteSize, Vector2.One),
+                StretchMode.Fit => Vector2.Min(Size / _spriteSize, Vector2.One),
                 StretchMode.Fill => Size / _spriteSize,
                 _ => Vector2.One,
             };
+            var stretch = MathF.Min(stretchVec.X, stretchVec.Y);
 
             var offset = SpriteOffset
                 ? Vector2.Zero
-                : - (-_eyeRotation).RotateVec(_sprite.Offset) * (1, -1) * EyeManager.PixelsPerMeter;
+                : - (-_eyeRotation).RotateVec(sprite.Offset * _scale) * new Vector2(1, -1) * EyeManager.PixelsPerMeter;
 
             var position = PixelSize / 2 + offset * stretch * UIScale;
             var scale = Scale * UIScale * stretch;
-            renderHandle.DrawEntity(uid, position, scale, _worldRotation, _eyeRotation, OverrideDirection, _sprite);
+
+            // control modulation is applied automatically to the screen handle, but here we need to use the world handle
+            var world = renderHandle.DrawingHandleWorld;
+            var oldModulate = world.Modulate;
+            world.Modulate *= Modulate * ActualModulateSelf;
+
+            renderHandle.DrawEntity(uid, position, scale, _worldRotation, _eyeRotation, OverrideDirection, sprite, xform, _transform);
+            world.Modulate = oldModulate;
+        }
+
+        private bool ResolveEntity(
+            out EntityUid uid,
+            [NotNullWhen(true)] out SpriteComponent? sprite,
+            [NotNullWhen(true)] out TransformComponent? xform)
+        {
+            if (NetEnt != null && Entity == null && EntMan.TryGetEntity(NetEnt, out var ent))
+                SetEntity(ent);
+
+            if (Entity != null)
+            {
+                (uid, sprite, xform) = Entity.Value;
+                return !EntMan.Deleted(uid);
+            }
+
+            sprite = null;
+            xform = null;
+            uid = default;
+            return false;
         }
     }
 }

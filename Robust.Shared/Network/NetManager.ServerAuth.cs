@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -16,7 +17,7 @@ namespace Robust.Shared.Network
 {
     partial class NetManager
     {
-        private readonly static string DisconnectReasonWrongKey = NetStructuredDisconnectMessages.Encode("Token decryption failed.\nPlease reconnect to this server from the launcher.", true);
+        private static readonly string DisconnectReasonWrongKey = new NetDisconnectMessage("Token decryption failed.\nPlease reconnect to this server from the launcher.", true).Encode();
 
         private readonly byte[] _cryptoPrivateKey = new byte[CryptoBox.SecretKeyBytes];
 
@@ -30,13 +31,16 @@ namespace Robust.Shared.Network
         {
             CryptoBox.KeyPair(CryptoPublicKey, _cryptoPrivateKey);
 
-            Logger.DebugS("auth", "Public key is {0}", Convert.ToBase64String(CryptoPublicKey));
+            _authLogger.Debug("Public key is {0}", Convert.ToBase64String(CryptoPublicKey));
         }
 
         private async void HandleHandshake(NetPeerData peer, NetConnection connection)
         {
             try
             {
+                _logger.Verbose($"{connection.RemoteEndPoint}: Starting handshake with peer ");
+
+                _logger.Verbose($"{connection.RemoteEndPoint}: Awaiting MsgLoginStart");
                 var incPacket = await AwaitData(connection);
 
                 var msgLogin = new MsgLoginStart();
@@ -47,6 +51,13 @@ namespace Robust.Shared.Network
                 var canAuth = msgLogin.CanAuth;
                 var needPk = msgLogin.NeedPubKey;
                 var authServer = _config.GetCVar(CVars.AuthServer);
+
+                _logger.Verbose(
+                    $"{connection.RemoteEndPoint}: Received MsgLoginStart. " +
+                    $"canAuth: {canAuth}, needPk: {needPk}, username: {msgLogin.UserName}, encrypt: {msgLogin.Encrypt}");
+
+                _logger.Verbose(
+                    $"{connection.RemoteEndPoint}: Connection is specialized local? {isLocal} ");
 
                 if (Auth == AuthMode.Required && !isLocal)
                 {
@@ -64,12 +75,17 @@ namespace Robust.Shared.Network
 
                 if (canAuth && Auth != AuthMode.Disabled)
                 {
+                    _logger.Verbose(
+                        $"{connection.RemoteEndPoint}: Initiating authentication");
+
                     var verifyToken = new byte[4];
                     RandomNumberGenerator.Fill(verifyToken);
+                    var wantHwid = _config.GetCVar(CVars.NetHWId);
                     var msgEncReq = new MsgEncryptionRequest
                     {
                         PublicKey = needPk ? CryptoPublicKey : Array.Empty<byte>(),
-                        VerifyToken = verifyToken
+                        VerifyToken = verifyToken,
+                        WantHwid = wantHwid
                     };
 
                     var outMsgEncReq = peer.Peer.CreateMessage();
@@ -78,10 +94,16 @@ namespace Robust.Shared.Network
                     msgEncReq.WriteToBuffer(outMsgEncReq, _serializer);
                     peer.Peer.SendMessage(outMsgEncReq, connection, NetDeliveryMethod.ReliableOrdered);
 
+                    _logger.Verbose(
+                        $"{connection.RemoteEndPoint}: Awaiting MsgEncryptionResponse");
+
                     incPacket = await AwaitData(connection);
 
                     var msgEncResponse = new MsgEncryptionResponse();
                     msgEncResponse.ReadFromBuffer(incPacket, _serializer);
+
+                    _logger.Verbose(
+                        $"{connection.RemoteEndPoint}: Received MsgEncryptionResponse");
 
                     var encResp = new byte[verifyToken.Length + SharedKeyLength];
                     var ret = CryptoBox.SealOpen(
@@ -112,11 +134,14 @@ namespace Robust.Shared.Network
                     if (msgLogin.Encrypt)
                         encryption = new NetEncryption(sharedSecret, isServer: true);
 
+                    _logger.Verbose(
+                        $"{connection.RemoteEndPoint}: Checking with session server for auth hash...");
+
                     var authHashBytes = MakeAuthHash(sharedSecret, CryptoPublicKey!);
                     var authHash = Base64Helpers.ConvertToBase64Url(authHashBytes);
 
                     var url = $"{authServer}api/session/hasJoined?hash={authHash}&userId={msgEncResponse.UserId}";
-                    var joinedRespJson = await _httpClient.GetFromJsonAsync<HasJoinedResponse>(url);
+                    var joinedRespJson = await _http.Client.GetFromJsonAsync<HasJoinedResponse>(url);
 
                     if (joinedRespJson is not {IsValid: true})
                     {
@@ -124,17 +149,40 @@ namespace Robust.Shared.Network
                         return;
                     }
 
+                    _logger.Verbose(
+                        $"{connection.RemoteEndPoint}: Auth hash passed. " +
+                        $"User ID: {joinedRespJson.UserData!.UserId}, " +
+                        $"Username: {joinedRespJson.UserData!.UserName}," +
+                        $"Patron: {joinedRespJson.UserData.PatronTier}");
+
                     var userId = new NetUserId(joinedRespJson.UserData!.UserId);
+                    ImmutableArray<ImmutableArray<byte>> modernHWIds = [
+                        ..joinedRespJson.ConnectionData!.Hwids
+                            .Select(h => ImmutableArray.Create(Convert.FromBase64String(h)))
+                    ];
+                    ImmutableArray<byte> legacyHwid = [..msgEncResponse.LegacyHwid];
+                    if (!wantHwid)
+                    {
+                        // If the client somehow sends a HWID even if we didn't ask for one, ignore it.
+                        modernHWIds = [];
+                        legacyHwid = [];
+                    }
+
                     userData = new NetUserData(userId, joinedRespJson.UserData.UserName)
                     {
                         PatronTier = joinedRespJson.UserData.PatronTier,
-                        HWId = msgLogin.HWId
+                        HWId = legacyHwid,
+                        ModernHWIds = modernHWIds,
+                        Trust = joinedRespJson.ConnectionData!.Trust
                     };
                     padSuccessMessage = false;
                     type = LoginType.LoggedIn;
                 }
                 else
                 {
+                    _logger.Verbose(
+                        $"{connection.RemoteEndPoint}: Not doing authentication");
+
                     var reqUserName = msgLogin.UserName;
 
                     if (!UsernameHelpers.IsNameValid(reqUserName, out var reason))
@@ -157,26 +205,51 @@ namespace Robust.Shared.Network
                         name = $"{origName}_{++iterations}";
                     }
 
+                    _logger.Verbose(
+                        $"{connection.RemoteEndPoint}: Assigned name: {name}");
+
                     NetUserId userId;
                     (userId, type) = await AssignUserIdAsync(name);
 
+                    _logger.Verbose(
+                        $"{connection.RemoteEndPoint}: Assigned user ID: {userId}");
+
                     userData = new NetUserData(userId, name)
                     {
-                        HWId = msgLogin.HWId
+                        HWId = [],
+                        ModernHWIds = []
                     };
                 }
 
+                _logger.Verbose(
+                    $"{connection.RemoteEndPoint}: Login type: {type}");
+
+                _logger.Verbose(
+                    $"{connection.RemoteEndPoint}: Raising Connecting event");
+
                 var endPoint = connection.RemoteEndPoint;
                 var connect = await OnConnecting(endPoint, userData, type);
-                if (connect.IsDenied)
+                if (connect.DenyReasonData is { } deny)
                 {
-                    connection.Disconnect($"Connection denied: {connect.DenyReason}");
+                    var denyMsg = $"Connect denied: {deny.Text}";
+                    var structured = new NetDisconnectMessage(denyMsg);
+                    foreach (var (k, v) in deny.AdditionalProperties)
+                    {
+                        structured.Values[k] = v;
+                    }
+                    connection.Disconnect(structured.Encode());
                     return;
                 }
+
+                _logger.Verbose(
+                    $"{connection.RemoteEndPoint}: Connecting event passed, client is IN");
 
                 // Well they're in. Kick a connected client with the same GUID if we have to.
                 if (_assignedUserIds.TryGetValue(userData.UserId, out var existing))
                 {
+                    _logger.Verbose(
+                        $"{connection.RemoteEndPoint}: User was already connected in another connection, disconnecting");
+
                     if (_awaitingDisconnectToConnect.Contains(userData.UserId))
                     {
                         connection.Disconnect("Stop trying to connect multiple times at once.");
@@ -188,7 +261,14 @@ namespace Robust.Shared.Network
                     {
                         existing.Disconnect("Another connection has been made with your account.");
                         // Have to wait until they're properly off the server to avoid any collisions.
+
+                        _logger.Verbose(
+                            $"{connection.RemoteEndPoint}: Awaiting for clean disconnect of previous client");
+
                         await AwaitDisconnectAsync(existing);
+
+                        _logger.Verbose(
+                            $"{connection.RemoteEndPoint}: Previous client disconnected");
                     }
                     finally
                     {
@@ -199,12 +279,13 @@ namespace Robust.Shared.Network
                 if (connection.Status == NetConnectionStatus.Disconnecting ||
                     connection.Status == NetConnectionStatus.Disconnected)
                 {
-                    Logger.InfoS("net",
-                        "{ConnectionEndpoint} ({UserId}/{UserName}) disconnected during handshake",
+                    _logger.Info("{ConnectionEndpoint} ({UserId}/{UserName}) disconnected during handshake",
                         connection.RemoteEndPoint, userData.UserId, userData.UserName);
 
                     return;
                 }
+
+                _logger.Verbose($"{connection.RemoteEndPoint}: Sending MsgLoginSuccess");
 
                 var msg = peer.Peer.CreateMessage();
                 var msgResp = new MsgLoginSuccess
@@ -222,8 +303,7 @@ namespace Robust.Shared.Network
                 encryption?.Encrypt(msg);
                 peer.Peer.SendMessage(msg, connection, NetDeliveryMethod.ReliableOrdered);
 
-                Logger.InfoS("net",
-                    "Approved {ConnectionEndpoint} with username {Username} user ID {userId} into the server",
+                _logger.Info("Approved {ConnectionEndpoint} with username {Username} user ID {userId} into the server",
                     connection.RemoteEndPoint, userData.UserName, userData.UserId);
 
                 // Handshake complete!
@@ -231,13 +311,12 @@ namespace Robust.Shared.Network
             }
             catch (ClientDisconnectedException)
             {
-                Logger.InfoS("net",
-                    $"Peer {NetUtility.ToHexString(connection.RemoteUniqueIdentifier)} disconnected while handshake was in-progress.");
+                _logger.Info($"Peer {NetUtility.ToHexString(connection.RemoteUniqueIdentifier)} disconnected while handshake was in-progress.");
             }
             catch (Exception e)
             {
                 connection.Disconnect("Unknown server error occured during handshake.");
-                Logger.ErrorS("net", "Exception during handshake with peer {0}:\n{1}",
+                _logger.Error("Exception during handshake with peer {0}:\n{1}",
                     NetUtility.ToHexString(connection.RemoteUniqueIdentifier), e);
             }
         }
@@ -274,6 +353,7 @@ namespace Robust.Shared.Network
 
         private async void HandleApproval(NetIncomingMessage message)
         {
+            DebugTools.Assert(message.SenderConnection != null);
             // TODO: Maybe preemptively refuse connections here in some cases?
             if (message.SenderConnection.Status != NetConnectionStatus.RespondedAwaitingApproval)
             {
@@ -297,8 +377,9 @@ namespace Robust.Shared.Network
         }
 
         // ReSharper disable ClassNeverInstantiated.Local
-        private sealed record HasJoinedResponse(bool IsValid, HasJoinedUserData? UserData);
+        private sealed record HasJoinedResponse(bool IsValid, HasJoinedUserData? UserData, HasJoinedConnectionData? ConnectionData);
         private sealed record HasJoinedUserData(string UserName, Guid UserId, string? PatronTier);
+        private sealed record HasJoinedConnectionData(string[] Hwids, float Trust);
         // ReSharper restore ClassNeverInstantiated.Local
     }
 }

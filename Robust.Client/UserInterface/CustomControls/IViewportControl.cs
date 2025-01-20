@@ -1,3 +1,4 @@
+using System.Numerics;
 using Robust.Client.Graphics;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
@@ -24,6 +25,11 @@ namespace Robust.Client.UserInterface.CustomControls
         MapCoordinates ScreenToMap(Vector2 coords);
 
         /// <summary>
+        /// Similar to <see cref="ScreenToMap(Vector2)"/>, except it should compensate for the effects of shaders on viewports.
+        /// </summary>
+        MapCoordinates PixelToMap(Vector2 point);
+
+        /// <summary>
         ///     Converts a point on the map to screen coordinates.
         /// </summary>
         /// <returns>
@@ -37,11 +43,11 @@ namespace Robust.Client.UserInterface.CustomControls
         /// <remarks>
         ///     This is generally just be a combination of <see cref="IClydeViewport.GetWorldToLocalMatrix"/> and <see cref="GetLocalToScreenMatrix"/>
         /// </remarks>
-        Matrix3 GetWorldToScreenMatrix();
+        Matrix3x2 GetWorldToScreenMatrix();
 
         /// <summary>
         ///     Returns a matrix that can be used to transform from view-port local to screen coordinates.
         /// </summary>
-        Matrix3 GetLocalToScreenMatrix();
+        Matrix3x2 GetLocalToScreenMatrix();
     }
 }

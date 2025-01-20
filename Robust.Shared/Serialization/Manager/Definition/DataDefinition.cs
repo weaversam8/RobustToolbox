@@ -57,6 +57,16 @@ namespace Robust.Shared.Serialization.Manager.Definition
             IsRecord = isRecord;
 
             var fieldDefs = GetFieldDefinitions(manager, isRecord);
+            foreach (var field in fieldDefs)
+            {
+                if (field.Attribute is not DataFieldAttribute attribute ||
+                    attribute.Tag != null)
+                {
+                    continue;
+                }
+
+                attribute.Tag = DataDefinitionUtility.AutoGenerateTag(field.FieldInfo.Name);
+            }
 
             var dataFields = fieldDefs
                 .Select(f => f.Attribute)
@@ -65,7 +75,7 @@ namespace Robust.Shared.Serialization.Manager.Definition
             Duplicates = dataFields
                 .Where(f =>
                     dataFields.Count(df => df.Tag == f.Tag) > 1)
-                .Select(f => f.Tag)
+                .Select(f => f.Tag!)
                 .Distinct()
                 .ToArray();
 
@@ -85,7 +95,7 @@ namespace Robust.Shared.Serialization.Manager.Definition
             for (var i = 0; i < BaseFieldDefinitions.Length; i++)
             {
                 var fieldDefinition = BaseFieldDefinitions[i];
-                fieldAssigners[i] = InternalReflectionUtils.EmitFieldAssigner<T>(fieldDefinition.BackingField);
+                fieldAssigners[i] = InternalReflectionUtils.EmitFieldAssigner(typeof(T), fieldDefinition.BackingField);
                 fieldAccessors[i] = InternalReflectionUtils.EmitFieldAccessor(typeof(T), fieldDefinition);
 
                 if (fieldDefinition.Attribute.CustomTypeSerializer != null)

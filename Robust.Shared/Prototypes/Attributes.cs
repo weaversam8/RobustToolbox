@@ -15,13 +15,21 @@ namespace Robust.Shared.Prototypes;
 [Virtual]
 public class PrototypeAttribute : Attribute
 {
-    private readonly string type;
-    public string Type => type;
+    /// <summary>
+    /// Override for the name of this kind of prototype. If not specified, this is automatically inferred via <see cref="PrototypeManager.CalculatePrototypeName"/>
+    /// </summary>
+    public string? Type { get; internal set; }
     public readonly int LoadPriority = 1;
 
-    public PrototypeAttribute(string type, int loadPriority = 1)
+    public PrototypeAttribute(string? type = null, int loadPriority = 1)
     {
-        this.type = type;
+        Type = type;
+        LoadPriority = loadPriority;
+    }
+
+    public PrototypeAttribute(int loadPriority)
+    {
+        Type = null;
         LoadPriority = loadPriority;
     }
 }

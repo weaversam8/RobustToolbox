@@ -78,9 +78,16 @@ namespace Robust.Shared.Console
         /// <remarks>
         /// If this method is implemented, <see cref="GetCompletion"/> will not be automatically called.
         /// </remarks>
-        ValueTask<CompletionResult> GetCompletionAsync(IConsoleShell shell, string[] args, CancellationToken cancel)
+        ValueTask<CompletionResult> GetCompletionAsync(IConsoleShell shell, string[] args, string argStr, CancellationToken cancel)
         {
             return ValueTask.FromResult(GetCompletion(shell, args));
         }
     }
+
+    /// <summary>
+    /// Special marker interface used to indicate "entity" commands.
+    /// See <see cref="LocalizedEntityCommands"/> for an overview.
+    /// </summary>
+    /// <seealso cref="EntityConsoleHost"/>
+    internal interface IEntityConsoleCommand : IConsoleCommand;
 }

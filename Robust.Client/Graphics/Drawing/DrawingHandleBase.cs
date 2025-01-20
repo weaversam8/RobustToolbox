@@ -1,7 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using Robust.Shared.Maths;
 
 namespace Robust.Client.Graphics
@@ -11,9 +14,9 @@ namespace Robust.Client.Graphics
     /// </summary>
     public abstract class DrawingHandleBase : IDisposable
     {
-        //private protected IRenderHandle _renderHandle;
         private protected readonly int _handleId;
         public bool Disposed { get; private set; }
+
         /// <summary>
         ///     Drawing commands that do NOT receive per-vertex modulation get modulated by this.
         ///     Specifically, *DrawPrimitives w/ DrawVertexUV2DColor IS NOT AFFECTED BY THIS*.
@@ -25,6 +28,13 @@ namespace Robust.Client.Graphics
         /// </summary>
         public Color Modulate { get; set; } = Color.White;
 
+        protected Texture White;
+
+        public DrawingHandleBase(Texture white)
+        {
+            White = white;
+        }
+
         public void Dispose()
         {
             Disposed = true;
@@ -34,21 +44,38 @@ namespace Robust.Client.Graphics
         {
             CheckDisposed();
 
-            var matrix = Matrix3.CreateTransform(in position, in rotation, in scale);
+            var matrix = Matrix3Helpers.CreateTransform(in position, in rotation, in scale);
             SetTransform(in matrix);
         }
 
         public void SetTransform(in Vector2 position, in Angle rotation)
         {
-            var matrix = Matrix3.CreateTransform(in position, in rotation);
+            var matrix = Matrix3Helpers.CreateTransform(in position, in rotation);
             SetTransform(in matrix);
         }
 
-        public abstract void SetTransform(in Matrix3 matrix);
+        public abstract void SetTransform(in Matrix3x2 matrix);
+
+        public abstract Matrix3x2 GetTransform();
 
         public abstract void UseShader(ShaderInstance? shader);
 
+        public abstract ShaderInstance? GetShader();
+
         // ---- DrawPrimitives: Vector2 API ----
+
+        /// <summary>
+        ///     Draws arbitrary geometry primitives with a flat color.
+        /// </summary>
+        /// <param name="primitiveTopology">The topology of the primitives to draw.</param>
+        /// <param name="vertices">The list of vertices to render.</param>
+        /// <param name="color">The color to draw with.</param>
+        public void DrawPrimitives(DrawPrimitiveTopology primitiveTopology, List<Vector2> vertices,
+            Color color)
+        {
+            var span = CollectionsMarshal.AsSpan(vertices);
+            DrawPrimitives(primitiveTopology, span, color);
+        }
 
         /// <summary>
         ///     Draws arbitrary geometry primitives with a flat color.
@@ -65,7 +92,7 @@ namespace Robust.Client.Graphics
             Span<DrawVertexUV2DColor> drawVertices = stackalloc DrawVertexUV2DColor[vertices.Length];
             PadVerticesV2(vertices, drawVertices, realColor);
 
-            DrawPrimitives(primitiveTopology, Texture.White, drawVertices);
+            DrawPrimitives(primitiveTopology, White, drawVertices);
         }
 
         /// <summary>
@@ -84,7 +111,7 @@ namespace Robust.Client.Graphics
             Span<DrawVertexUV2DColor> drawVertices = stackalloc DrawVertexUV2DColor[vertices.Length];
             PadVerticesV2(vertices, drawVertices, realColor);
 
-            DrawPrimitives(primitiveTopology, Texture.White, indices, drawVertices);
+            DrawPrimitives(primitiveTopology, White, indices, drawVertices);
         }
 
         private void PadVerticesV2(ReadOnlySpan<Vector2> input, Span<DrawVertexUV2DColor> output, Color color)
@@ -92,7 +119,7 @@ namespace Robust.Client.Graphics
             Color colorLinear = Color.FromSrgb(color);
             for (var i = 0; i < output.Length; i++)
             {
-                output[i] = new DrawVertexUV2DColor(input[i], (0.5f, 0.5f), colorLinear);
+                output[i] = new DrawVertexUV2DColor(input[i], new Vector2(0.5f, 0.5f), colorLinear);
             }
         }
 
@@ -184,6 +211,8 @@ namespace Robust.Client.Graphics
         public abstract void DrawLine(Vector2 from, Vector2 to, Color color);
 
         public abstract void RenderInRenderTarget(IRenderTarget target, Action a, Color? clearColor);
+
+        public abstract void DrawTexture(Texture texture, Vector2 position, Color? modulate = null);
     }
 
     /// <summary>
@@ -210,6 +239,8 @@ namespace Robust.Client.Graphics
     {
         public Vector2 Position;
         public Vector2 UV;
+        public Vector2 UV2;
+
         /// <summary>
         ///     Modulation colour for this vertex.
         ///     Note that this color is in linear space.

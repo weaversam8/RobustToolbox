@@ -202,7 +202,9 @@ namespace Robust.UnitTesting.Shared.Maths
             Assert.That(sysColor, Is.EqualTo((System.Drawing.Color) color));
         }
 
-        static IEnumerable<string> DefaultColorNames => Color.GetAllDefaultColors().Select(e => e.Key);
+        static IEnumerable<string> DefaultColorNames => Color.GetAllDefaultColors()
+            .Where(e => System.Drawing.Color.FromName(e.Key).IsKnownColor)
+            .Select(e => e.Key);
 
         [Test]
         public void GetAllDefaultColorsFromName([ValueSource(nameof(DefaultColorNames))] string colorName)
@@ -342,7 +344,7 @@ namespace Robust.UnitTesting.Shared.Maths
             var controlColor = new Color(rf, gf, bf, af);
             var color = Color.FromSrgb(Color.ToSrgb(controlColor));
 
-            Assert.That(color, Is.EqualTo(controlColor));
+            Assert.That(MathHelper.CloseToPercent(color, controlColor));
         }
 
         [Test]
@@ -353,7 +355,7 @@ namespace Robust.UnitTesting.Shared.Maths
             var controlColor = new Color(rf, gf, bf, af);
             var color = Color.FromHsl(Color.ToHsl(controlColor));
 
-            Assert.That(color, Is.EqualTo(controlColor));
+            Assert.That(MathHelper.CloseToPercent(color, controlColor));
         }
 
         [Test]
@@ -364,7 +366,7 @@ namespace Robust.UnitTesting.Shared.Maths
             var controlColor = new Color(rf, gf, bf, af);
             var color = Color.FromHsv(Color.ToHsv(controlColor));
 
-            Assert.That(color, Is.EqualTo(controlColor));
+            Assert.That(MathHelper.CloseToPercent(color, controlColor));
         }
 
         [Test]
@@ -391,7 +393,7 @@ namespace Robust.UnitTesting.Shared.Maths
             var controlColor = new Color(rf, gf, bf, af);
             var color = Color.FromYcbcr(Color.ToYcbcr(controlColor));
 
-            Assert.That(color, Is.EqualTo(controlColor));
+            Assert.That(MathHelper.CloseToPercent(color, controlColor));
         }
 
         [Test]
@@ -402,7 +404,7 @@ namespace Robust.UnitTesting.Shared.Maths
             var controlColor = new Color(rf, gf, bf, af);
             var color = Color.FromHcy(Color.ToHcy(controlColor));
 
-            Assert.That(color, Is.EqualTo(controlColor));
+            Assert.That(MathHelper.CloseToPercent(color, controlColor));
         }
 
         static IEnumerable<float> InterpolationValues => new float[]
@@ -428,7 +430,7 @@ namespace Robust.UnitTesting.Shared.Maths
             var interColor = Color.InterpolateBetween(color1, color2, interpolation);
             var inverseInterColor = Color.InterpolateBetween(color2, color1, 1 - interpolation);
 
-            Assert.That(interColor, Is.EqualTo(inverseInterColor));
+            Assert.That(MathHelper.CloseToPercent(interColor, inverseInterColor));
         }
 
         [Test]

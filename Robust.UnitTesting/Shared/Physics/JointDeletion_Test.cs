@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using Robust.Shared.GameObjects;
@@ -38,7 +39,7 @@ public sealed class JointDeletion_Test : RobustIntegrationTest
 
         await server.WaitPost(() =>
         {
-            mapId = mapManager.CreateMap();
+            entManager.System<SharedMapSystem>().CreateMap(out mapId);
             ent1 = entManager.SpawnEntity(null, new MapCoordinates(Vector2.Zero, mapId));
             ent2 = entManager.SpawnEntity(null, new MapCoordinates(Vector2.One, mapId));
 
@@ -55,7 +56,7 @@ public sealed class JointDeletion_Test : RobustIntegrationTest
             var shape = new PolygonShape();
             shape.SetAsBox(0.5f, 0.5f);
 
-            fixSystem.CreateFixture(ent2, new Fixture(shape, 0, 0, false), manager: manager2, body: body2);
+            fixSystem.CreateFixture(ent2, "fix1", new Fixture(shape, 0, 0, false), manager: manager2, body: body2);
 
             joint = jointSystem.CreateDistanceJoint(ent1, ent2, id: "distance-joint");
             joint.CollideConnected = false;

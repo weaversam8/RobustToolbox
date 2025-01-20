@@ -14,16 +14,37 @@ namespace Robust.Shared.ComponentTrees;
 internal sealed class RecursiveMoveSystem : EntitySystem
 {
     [Dependency] private readonly IMapManager _mapManager = default!;
+    [Dependency] private readonly SharedTransformSystem _transform = default!;
 
-    bool Subscribed = false;
+    public delegate void TreeRecursiveMoveEventHandler(EntityUid uid, TransformComponent xform);
+
+    public event TreeRecursiveMoveEventHandler? OnTreeRecursiveMove;
+
+    private EntityQuery<TransformComponent> _xformQuery;
+
+    bool _subscribed = false;
+
+    public override void Initialize()
+    {
+        base.Initialize();
+        _xformQuery = GetEntityQuery<TransformComponent>();
+    }
+
+    public override void Shutdown()
+    {
+        if (_subscribed)
+            _transform.OnBeforeMoveEvent -= AnythingMoved;
+
+        _subscribed = false;
+    }
 
     internal void AddSubscription()
     {
-        if (Subscribed)
+        if (_subscribed)
             return;
 
-        Subscribed = true;
-        SubscribeLocalEvent<MoveEvent>(AnythingMoved);
+        _subscribed = true;
+        _transform.OnBeforeMoveEvent += AnythingMoved;
     }
 
     private void AnythingMoved(ref MoveEvent args)
@@ -34,27 +55,23 @@ internal sealed class RecursiveMoveSystem : EntitySystem
         DebugTools.Assert(!_mapManager.IsMap(args.Sender));
         DebugTools.Assert(!_mapManager.IsGrid(args.Sender));
 
-        var xformQuery = GetEntityQuery<TransformComponent>();
-        AnythingMovedSubHandler(args.Sender, args.Component, xformQuery);
+        AnythingMovedSubHandler(args.Sender, args.Component);
     }
 
     private void AnythingMovedSubHandler(
         EntityUid uid,
-        TransformComponent xform,
-        EntityQuery<TransformComponent> xformQuery)
+        TransformComponent xform)
     {
-        var ev = new TreeRecursiveMoveEvent(xform);
-        RaiseLocalEvent(uid, ref ev);
+        OnTreeRecursiveMove?.Invoke(uid, xform);
 
         // TODO only enumerate over entities in containers if necessary?
         // annoyingly, containers aren't guaranteed to occlude sprites & lights
         // but AFAIK thats currently unused???
 
-        var childEnumerator = xform.ChildEnumerator;
-        while (childEnumerator.MoveNext(out var child))
+        foreach (var child in xform._children)
         {
-            if (xformQuery.TryGetComponent(child.Value, out var childXform))
-                AnythingMovedSubHandler(child.Value, childXform, xformQuery);
+            if (_xformQuery.TryGetComponent(child, out var childXform))
+                AnythingMovedSubHandler(child, childXform);
         }
     }
 }

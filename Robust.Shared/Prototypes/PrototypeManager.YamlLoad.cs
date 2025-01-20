@@ -7,15 +7,23 @@ using Robust.Shared.Random;
 using Robust.Shared.Serialization.Markdown;
 using Robust.Shared.Serialization.Markdown.Mapping;
 using Robust.Shared.Serialization.Markdown.Sequence;
-using Robust.Shared.Serialization.Markdown.Validation;
 using Robust.Shared.Serialization.Markdown.Value;
 using Robust.Shared.Utility;
-using YamlDotNet.RepresentationModel;
 
 namespace Robust.Shared.Prototypes;
 
 public partial class PrototypeManager
 {
+    /// <summary>
+    ///     Which files to force all prototypes within to be abstract.
+    /// </summary>
+    private readonly List<ResPath> _abstractFiles = new();
+
+    /// <summary>
+    ///     Which directories to force all prototypes recursively within to be abstract.
+    /// </summary>
+    private readonly List<ResPath> _abstractDirectories = new();
+
     public event Action<DataNodeDocument>? LoadedData;
 
     /// <inheritdoc />
@@ -28,7 +36,7 @@ public partial class PrototypeManager
             .ToArray();
 
         // Shuffle to avoid input data patterns causing uneven thread workloads.
-        RandomExtensions.Shuffle(streams.AsSpan(), new System.Random());
+        (new System.Random()).Shuffle(streams.AsSpan());
 
         var sawmill = _logManager.GetSawmill("eng");
 
@@ -37,6 +45,7 @@ public partial class PrototypeManager
             {
                 try
                 {
+                    var ignored = IsFileAbstract(file);
                     using var reader = ReadFile(file, !overwrite);
 
                     if (reader == null)
@@ -52,7 +61,12 @@ public partial class PrototypeManager
                         {
                             var data = ExtractMapping((MappingDataNode)mapping);
                             if (data != null)
+                            {
+                                if (ignored)
+                                    AbstractPrototype(data.Data);
+
                                 extractedList.Add(data);
+                            }
                         }
                     }
 
@@ -81,70 +95,6 @@ public partial class PrototypeManager
         }
     }
 
-    public Dictionary<string, HashSet<ErrorNode>> ValidateDirectory(ResPath path)
-    {
-        var streams = Resources.ContentFindFiles(path).ToList().AsParallel()
-            .Where(filePath => filePath.Extension == "yml" && !filePath.Filename.StartsWith("."));
-
-        var dict = new Dictionary<string, HashSet<ErrorNode>>();
-        // Prototypes we've seen before to catch duplicates.
-        var seen = new Dictionary<string, HashSet<string>>();
-
-        foreach (var resourcePath in streams)
-        {
-            using var reader = ReadFile(resourcePath);
-
-            if (reader == null)
-            {
-                continue;
-            }
-
-            var yamlStream = new YamlStream();
-            yamlStream.Load(reader);
-
-            for (var i = 0; i < yamlStream.Documents.Count; i++)
-            {
-                var rootNode = (YamlSequenceNode)yamlStream.Documents[i].RootNode;
-                foreach (YamlMappingNode node in rootNode.Cast<YamlMappingNode>())
-                {
-                    var type = node.GetNode("type").AsString();
-                    if (!_kindNames.ContainsKey(type))
-                    {
-                        if (_ignoredPrototypeTypes.Contains(type))
-                        {
-                            continue;
-                        }
-
-                        throw new PrototypeLoadException($"Unknown prototype type: '{type}'");
-                    }
-
-                    var before = seen.GetOrNew(type);
-
-                    var mapping = node.ToDataNodeCast<MappingDataNode>();
-                    var id = mapping["id"].ToString();
-
-                    HashSet<ErrorNode> hashSet;
-
-                    if (!before.Add(id!))
-                    {
-                        hashSet = dict.GetOrNew(resourcePath.ToString());
-                        hashSet.Add(new ErrorNode(mapping, $"Found dupe prototype ID of {id} for {type}"));
-                        continue;
-                    }
-
-                    mapping.Remove("type");
-                    var errorNodes = _serializationManager.ValidateNode(_kindNames[type], mapping).GetErrors()
-                        .ToHashSet();
-                    if (errorNodes.Count == 0) continue;
-                    hashSet = dict.GetOrNew(resourcePath.ToString());
-                    hashSet.UnionWith(errorNodes);
-                }
-            }
-        }
-
-        return dict;
-    }
-
     private StreamReader? ReadFile(ResPath file, bool @throw = true)
     {
         var retries = 0;
@@ -166,7 +116,7 @@ public partial class PrototypeManager
                         throw;
                     }
 
-                    _sawmill.Error($"Error reloading prototypes in file {file}:\n{e}");
+                    Sawmill.Error($"Error reloading prototypes in file {file}:\n{e}");
                     return null;
                 }
 
@@ -180,6 +130,7 @@ public partial class PrototypeManager
     {
         try
         {
+            var ignored = IsFileAbstract(file);
             using var reader = ReadFile(file, !overwrite);
 
             if (reader == null)
@@ -199,12 +150,15 @@ public partial class PrototypeManager
                         if (extracted == null)
                             continue;
 
+                        if (ignored)
+                            AbstractPrototype(extracted.Data);
+
                         MergeMapping(extracted, overwrite, changed);
                     }
                 }
                 catch (Exception e)
                 {
-                    _sawmill.Error($"Exception whilst loading prototypes from {file}#{i}:\n{e}");
+                    Sawmill.Error($"Exception whilst loading prototypes from {file}#{i}:\n{e}");
                 }
 
                 i += 1;
@@ -212,18 +166,18 @@ public partial class PrototypeManager
         }
         catch (Exception e)
         {
-            _sawmill.Error("YamlException whilst loading prototypes from {0}: {1}", file, e.Message);
+            Sawmill.Error("YamlException whilst loading prototypes from {0}: {1}", file, e.Message);
         }
     }
 
     private ExtractedMappingData? ExtractMapping(MappingDataNode dataNode)
     {
         var type = dataNode.Get<ValueDataNode>("type").Value;
+        if (_ignoredPrototypeTypes.Contains(type))
+            return null;
+
         if (!_kindNames.TryGetValue(type, out var kind))
         {
-            if (_ignoredPrototypeTypes.Contains(type))
-                return null;
-
             throw new PrototypeLoadException($"Unknown prototype type: '{type}'");
         }
 
@@ -319,6 +273,7 @@ public partial class PrototypeManager
     {
         var reader = new StringReader(prototypes);
 
+        var modified = new HashSet<KindData>();
         foreach (var document in DataNodeParser.ParseYamlStream(reader))
         {
             var root = (SequenceDataNode)document.Root;
@@ -337,10 +292,65 @@ public partial class PrototypeManager
                 if (kindData.Inheritance is { } tree)
                     tree.Remove(id, true);
 
-                kindData.Instances.Remove(id);
+                kindData.UnfrozenInstances ??= kindData.Instances.ToDictionary();
+                kindData.UnfrozenInstances.Remove(id);
                 kindData.Results.Remove(id);
+                modified.Add(kindData);
             }
         }
+
+        Freeze(modified);
+    }
+
+    public void AbstractFile(ResPath path)
+    {
+        _abstractFiles.Add(path);
+    }
+
+    public void AbstractDirectory(ResPath path)
+    {
+        _abstractDirectories.Add(path);
+    }
+
+    private bool IsFileAbstract(ResPath file)
+    {
+        if (_abstractFiles.Count > 0)
+        {
+            foreach (var abstractFile in _abstractFiles)
+            {
+                if (file.TryRelativeTo(abstractFile, out _))
+                    return true;
+            }
+        }
+
+        if (_abstractDirectories.Count > 0)
+        {
+            foreach (var abstractDirectory in _abstractDirectories)
+            {
+                if (file.TryRelativeTo(abstractDirectory, out _))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void AbstractPrototype(MappingDataNode mapping)
+    {
+        if (mapping.TryGet(AbstractDataFieldAttribute.Name, out var abstractNode))
+        {
+            if (abstractNode is not ValueDataNode abstractValueNode)
+            {
+                mapping.Remove(abstractNode);
+                mapping.Add("abstract", "true");
+                return;
+            }
+
+            abstractValueNode.Value = "true";
+            return;
+        }
+
+        mapping.Add("abstract", "true");
     }
 
     // All these fields can be null in case the

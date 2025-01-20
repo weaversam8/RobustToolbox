@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics.CodeAnalysis;
+using System.Numerics;
 using NUnit.Framework;
 using Robust.Client.UserInterface;
 using Robust.Client.UserInterface.Controls;
@@ -55,11 +56,11 @@ namespace Robust.UnitTesting.Client.UserInterface
             _userInterfaceManager.RootControl.AddChild(control1);
             control1.AddChild(control2);
             // Offsets to test relative positioning on the events.
-            LayoutContainer.SetPosition(control2, (5, 5));
+            LayoutContainer.SetPosition(control2, new Vector2(5, 5));
             control2.AddChild(control3);
-            LayoutContainer.SetPosition(control3, (5, 5));
+            LayoutContainer.SetPosition(control3, new Vector2(5, 5));
             control3.AddChild(control4);
-            LayoutContainer.SetPosition(control4, (5, 5));
+            LayoutContainer.SetPosition(control4, new Vector2(5, 5));
 
             control1.Arrange(new UIBox2(0, 0, 50, 50));
 
@@ -96,6 +97,7 @@ namespace Robust.UnitTesting.Client.UserInterface
             control4.OnKeyBindDown += _ => Assert.Fail("Control 4 should not get a mouse event.");
 
             _userInterfaceManager.KeyBindDown(mouseEvent);
+            _userInterfaceManager.KeyBindUp(mouseEvent);
 
             Assert.Multiple(() =>
             {
@@ -123,6 +125,7 @@ namespace Robust.UnitTesting.Client.UserInterface
             control2.MouseFilter = Control.MouseFilterMode.Pass;
 
             _userInterfaceManager.KeyBindDown(mouseEvent);
+            _userInterfaceManager.KeyBindUp(mouseEvent);
 
             Assert.Multiple(() =>
             {
@@ -130,10 +133,7 @@ namespace Robust.UnitTesting.Client.UserInterface
                 Assert.That(control3Fired, NUnit.Framework.Is.True);
             });
 
-            control1.Dispose();
-            control2.Dispose();
-            control3.Dispose();
-            control4.Dispose();
+            control1.Orphan();
         }
 
         [Test]
@@ -141,7 +141,6 @@ namespace Robust.UnitTesting.Client.UserInterface
         {
             Assert.That(_userInterfaceManager.KeyboardFocused, NUnit.Framework.Is.Null);
             var control1 = new Control {CanKeyboardFocus = true};
-            var control2 = new Control {CanKeyboardFocus = true};
 
             control1.GrabKeyboardFocus();
             Assert.That(_userInterfaceManager.KeyboardFocused, NUnit.Framework.Is.EqualTo(control1));
@@ -149,9 +148,6 @@ namespace Robust.UnitTesting.Client.UserInterface
 
             control1.ReleaseKeyboardFocus();
             Assert.That(_userInterfaceManager.KeyboardFocused, NUnit.Framework.Is.Null);
-
-            control1.Dispose();
-            control2.Dispose();
         }
 
         [Test]
@@ -166,9 +162,6 @@ namespace Robust.UnitTesting.Client.UserInterface
             Assert.That(_userInterfaceManager.KeyboardFocused, NUnit.Framework.Is.EqualTo(control2));
             control2.ReleaseKeyboardFocus();
             Assert.That(_userInterfaceManager.KeyboardFocused, NUnit.Framework.Is.Null);
-
-            control1.Dispose();
-            control2.Dispose();
         }
 
         [Test]
@@ -183,9 +176,6 @@ namespace Robust.UnitTesting.Client.UserInterface
             Assert.That(_userInterfaceManager.KeyboardFocused, NUnit.Framework.Is.EqualTo(control1));
             _userInterfaceManager.ReleaseKeyboardFocus();
             Assert.That(_userInterfaceManager.KeyboardFocused, NUnit.Framework.Is.Null);
-
-            control1.Dispose();
-            control2.Dispose();
         }
 
         [Test]
@@ -223,7 +213,7 @@ namespace Robust.UnitTesting.Client.UserInterface
             _userInterfaceManager.ReleaseKeyboardFocus();
             Assert.That(_userInterfaceManager.KeyboardFocused, NUnit.Framework.Is.Null);
 
-            control.Dispose();
+            control.Orphan();
         }
 
         /// <summary>
@@ -246,10 +236,11 @@ namespace Robust.UnitTesting.Client.UserInterface
                 pos, true, pos.Position / 1 - control.GlobalPosition, pos.Position - control.GlobalPixelPosition);
 
             _userInterfaceManager.KeyBindDown(mouseEvent);
+            _userInterfaceManager.KeyBindUp(mouseEvent);
 
             Assert.That(_userInterfaceManager.KeyboardFocused, NUnit.Framework.Is.Null);
 
-            control.Dispose();
+            control.Orphan();
         }
     }
 }

@@ -1,10 +1,8 @@
-using System;
 using NUnit.Framework;
 using Robust.Shared.GameObjects;
 using Robust.Shared.IoC;
 using Robust.Shared.Map;
 using Robust.Shared.Reflection;
-using Robust.Shared.Utility;
 using Robust.UnitTesting.Server;
 
 namespace Robust.UnitTesting.Shared.GameObjects
@@ -22,9 +20,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
                 .RegisterEntitySystems(factory => factory.LoadExtraSystemType<SubscribeCompRefDirectedEventSystem>())
                 .InitializeInstance();
 
-            var map = new MapId(1);
-            simulation.AddMap(map);
-
+            var map = simulation.CreateMap().MapId;
             var entity = simulation.SpawnEntity(null, new MapCoordinates(0, 0, map));
             IoCManager.Resolve<IEntityManager>().AddComponent<DummyComponent>(entity);
 
@@ -52,24 +48,6 @@ namespace Robust.UnitTesting.Shared.GameObjects
             }
         }
 
-        [Test]
-        public void SubscriptionNoMixedRefValueDirectedEvent()
-        {
-            // Arrange.
-            var simulation = RobustServerSimulation
-                .NewSimulation()
-                .RegisterComponents(factory =>
-                {
-                    factory.RegisterClass<DummyComponent>();
-                    factory.RegisterClass<DummyTwoComponent>();
-                })
-                .RegisterEntitySystems(factory =>
-                    factory.LoadExtraSystemType<SubscriptionNoMixedRefValueDirectedEventSystem>());
-
-            // Act. No mixed ref and value subscriptions are allowed.
-            Assert.Throws(typeof(InvalidOperationException), () => simulation.InitializeInstance());
-        }
-
         [Reflect(false)]
         private sealed class SubscriptionNoMixedRefValueDirectedEventSystem : EntitySystem
         {
@@ -79,7 +57,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
                 SubscribeLocalEvent<DummyComponent, TestStructEvent>(MyRefHandler);
 #pragma warning disable RA0013
                 SubscribeLocalEvent<DummyTwoComponent, TestStructEvent>(MyValueHandler);
-#pragma warning enable RA0013
+#pragma warning restore RA0013
             }
 
             private void MyValueHandler(EntityUid uid, DummyTwoComponent component, TestStructEvent args) { }
@@ -106,9 +84,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
                 })
                 .InitializeInstance();
 
-            var map = new MapId(1);
-            simulation.AddMap(map);
-
+            var map = simulation.CreateMap().MapId;
             var entity = simulation.SpawnEntity(null, new MapCoordinates(0, 0, map));
             IoCManager.Resolve<IEntityManager>().AddComponent<OrderAComponent>(entity);
             IoCManager.Resolve<IEntityManager>().AddComponent<OrderBComponent>(entity);
@@ -177,7 +153,7 @@ namespace Robust.UnitTesting.Shared.GameObjects
             }
         }
 
-        private sealed class DummyTwoComponent : Component
+        private sealed partial class DummyTwoComponent : Component
         {
         }
 

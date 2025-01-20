@@ -3,10 +3,14 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using OpenToolkit.Graphics.OpenGL4;
+using Robust.Client.Audio;
 using Robust.Client.Graphics;
 using Robust.Client.Utility;
 using Robust.Shared;
+using Robust.Shared.Audio;
 using Robust.Shared.Configuration;
+using Robust.Shared.ContentPack;
+using Robust.Shared.Graphics;
 using Robust.Shared.IoC;
 using Robust.Shared.Log;
 using Robust.Shared.Maths;
@@ -18,7 +22,10 @@ namespace Robust.Client.ResourceManagement
 {
     internal partial class ResourceCache
     {
-        [Dependency] private readonly IClyde _clyde = default!;
+        [field: Dependency] public IClyde Clyde { get; } = default!;
+        [field: Dependency] public IAudioInternal ClydeAudio { get; } = default!;
+        [Dependency] private readonly IResourceManager _manager = default!;
+        [field: Dependency] public IFontManager FontManager { get; } = default!;
         [Dependency] private readonly ILogManager _logManager = default!;
         [Dependency] private readonly IConfigurationManager _configurationManager = default!;
 
@@ -40,9 +47,9 @@ namespace Robust.Client.ResourceManagement
         {
             sawmill.Debug("Preloading textures...");
             var sw = Stopwatch.StartNew();
-            var resList = GetTypeDict<TextureResource>();
+            var resList = GetTypeData<TextureResource>().Resources;
 
-            var texList = ContentFindFiles("/Textures/")
+            var texList = _manager.ContentFindFiles("/Textures/")
                 // Skip PNG files inside RSIs.
                 .Where(p => p.Extension == "png" && !p.ToString().Contains(".rsi/") && !resList.ContainsKey(p))
                 .Select(p => new TextureResource.LoadStepData {Path = p})
@@ -52,7 +59,7 @@ namespace Robust.Client.ResourceManagement
             {
                 try
                 {
-                    TextureResource.LoadPreTexture(this, data);
+                    TextureResource.LoadPreTexture(_manager, data);
                 }
                 catch (Exception e)
                 {
@@ -70,7 +77,7 @@ namespace Robust.Client.ResourceManagement
 
                 try
                 {
-                    TextureResource.LoadTexture(_clyde, data);
+                    TextureResource.LoadTexture(Clyde, data);
                 }
                 catch (Exception e)
                 {
@@ -112,9 +119,9 @@ namespace Robust.Client.ResourceManagement
         private void PreloadRsis(ISawmill sawmill)
         {
             var sw = Stopwatch.StartNew();
-            var resList = GetTypeDict<RSIResource>();
+            var resList = GetTypeData<RSIResource>().Resources;
 
-            var rsiList = ContentFindFiles("/Textures/")
+            var rsiList = _manager.ContentFindFiles("/Textures/")
                 .Where(p => p.ToString().EndsWith(".rsi/meta.json"))
                 .Select(c => c.Directory)
                 .Where(p => !resList.ContainsKey(p))
@@ -125,7 +132,7 @@ namespace Robust.Client.ResourceManagement
             {
                 try
                 {
-                    RSIResource.LoadPreTexture(this, data);
+                    RSIResource.LoadPreTexture(_manager, data);
                 }
                 catch (Exception e)
                 {
@@ -135,6 +142,26 @@ namespace Robust.Client.ResourceManagement
                     data.Bad = true;
                 }
             });
+
+            var atlasLookup = rsiList.ToLookup(ShouldMetaAtlas);
+            var atlasList = atlasLookup[true].ToArray();
+            var nonAtlasList = atlasLookup[false].ToArray();
+
+            foreach (var data in nonAtlasList)
+            {
+                if (data.Bad)
+                    continue;
+
+                try
+                {
+                    RSIResource.LoadTexture(Clyde, data);
+                }
+                catch (Exception e)
+                {
+                    sawmill.Error($"Exception while loading RSI {data.Path}:\n{e}");
+                    data.Bad = true;
+                }
+            }
 
             // This combines individual RSI atlases into larger atlases to reduce draw batches. currently this is a VERY
             // lazy bundling and is not at all compact, its basically an atlas of RSI atlases. Really what this should
@@ -149,7 +176,7 @@ namespace Robust.Client.ResourceManagement
             // TODO allow RSIs to opt out (useful for very big & rare RSIs)
             // TODO combine with (non-rsi) texture atlas?
 
-            Array.Sort(rsiList, (b, a) => (b.AtlasSheet?.Height ?? 0).CompareTo(a.AtlasSheet?.Height ?? 0));
+            Array.Sort(atlasList, (b, a) => (b.AtlasSheet?.Height ?? 0).CompareTo(a.AtlasSheet?.Height ?? 0));
 
             // Each RSI sub atlas has a different size.
             // Even if we iterate through them once to estimate total area, I have NFI how to sanely estimate an optimal square-texture size.
@@ -161,9 +188,9 @@ namespace Robust.Client.ResourceManagement
             Vector2i offset = default;
             int finalized = -1;
             int atlasCount = 0;
-            for (int i = 0; i < rsiList.Length; i++)
+            for (int i = 0; i < atlasList.Length; i++)
             {
-                var rsi = rsiList[i];
+                var rsi = atlasList[i];
                 if (rsi.Bad)
                     continue;
 
@@ -194,14 +221,15 @@ namespace Robust.Client.ResourceManagement
             var height = offset.Y + deltaY;
             var croppedSheet = new Image<Rgba32>(maxSize, height);
             sheet.Blit(new UIBox2i(0, 0, maxSize, height), croppedSheet, default);
-            FinalizeMetaAtlas(rsiList.Length - 1, croppedSheet);
+            FinalizeMetaAtlas(atlasList.Length - 1, croppedSheet);
 
             void FinalizeMetaAtlas(int toIndex, Image<Rgba32> sheet)
             {
-                var atlas = _clyde.LoadTextureFromImage(sheet);
-                for (int i = finalized + 1; i <= toIndex; i++)
+                var fromIndex = finalized + 1;
+                var atlas = Clyde.LoadTextureFromImage(sheet, $"Meta atlas {fromIndex}-{toIndex}");
+                for (int i = fromIndex; i <= toIndex; i++)
                 {
-                    var rsi = rsiList[i];
+                    var rsi = atlasList[i];
                     rsi.AtlasTexture = atlas;
                 }
 
@@ -249,12 +277,17 @@ namespace Robust.Client.ResourceManagement
             }
 
             sawmill.Debug(
-                "Preloaded {CountLoaded} RSIs into {CountAtlas} Atlas(es?) ({CountErrored} errored) in {LoadTime}",
+                "Preloaded {CountLoaded} RSIs into {CountAtlas} Atlas(es?) ({CountNotAtlas} not atlassed, {CountErrored} errored) in {LoadTime}",
                 rsiList.Length,
                 atlasCount,
+                nonAtlasList.Length,
                 errors,
                 sw.Elapsed);
+        }
 
+        private static bool ShouldMetaAtlas(RSIResource.LoadStepData rsi)
+        {
+            return rsi.MetaAtlas && rsi.LoadParameters == TextureLoadParameters.Default;
         }
     }
 }

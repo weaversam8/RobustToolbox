@@ -15,7 +15,7 @@ namespace Robust.Shared.Utility
     /// <remarks>
     /// Use when the index's keys change more rapidly or when insertion and removal of keys is preferred over read time.
     /// It is intended to explicitly construct this index before use.
-    /// Do not refer to a <see cref="UniqueIndexHkm{TKey,TValue}"/> by it's interface.
+    /// Do not refer to a <see cref="UniqueIndexHkm{TKey,TValue}"/> by its interface.
     /// See <see cref="IUniqueIndex{TKey,TValue}"/> for details.
     /// </remarks>
     /// <typeparam name="TKey">The type of key.</typeparam>
@@ -26,7 +26,6 @@ namespace Robust.Shared.Utility
     public struct UniqueIndexHkm<TKey, TValue> : IUniqueIndex<TKey, TValue> where TKey : notnull
     {
 
-        [NotNull]
         private readonly Dictionary<TKey, HashSet<TValue>> _index;
 
         public UniqueIndexHkm(int capacity)
@@ -44,14 +43,7 @@ namespace Robust.Shared.Utility
         public bool Add(TKey key, TValue value)
         {
             InitializedCheck();
-
-            if (_index.TryGetValue(key, out var set))
-            {
-                return set.Add(value);
-            }
-
-            _index.Add(key, new HashSet<TValue> {value});
-            return true;
+            return _index.GetOrNew(key).Add(value);
         }
 
         /// <inheritdoc />
@@ -78,13 +70,7 @@ namespace Robust.Shared.Utility
         {
             InitializedCheck();
 
-            var c = _index.Count;
-
-            if (c == 0) return false;
-
-            _index[key] = new HashSet<TValue>();
-
-            return c > _index.Count;
+            return _index.Remove(key);
         }
 
         /// <inheritdoc />
@@ -103,14 +89,11 @@ namespace Robust.Shared.Utility
         {
             InitializedCheck();
 
-            if (_index.Count == 0) return 0;
-
-            if (!_index.TryGetValue(key, out var set)) return 0;
+            if (!_index.TryGetValue(key, out var set))
+                return 0;
 
             var c = set.Count;
-
-            set.ExceptWith(set);
-
+            set.ExceptWith(values);
             return c - set.Count;
         }
 

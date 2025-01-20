@@ -63,14 +63,14 @@ namespace Robust.Client.GameObjects
 
             protected internal override void Draw(in OverlayDrawArgs args)
             {
-                var map = _eyeManager.CurrentMap;
+                var map = args.MapId;
                 if (map == MapId.Nullspace) return;
 
-                foreach (var treeComp in _trees.GetIntersectingTrees(map, args.WorldBounds))
+                foreach (var (_, treeComp) in _trees.GetIntersectingTrees(map, args.WorldBounds))
                 {
-                    foreach (var (light, xform) in treeComp.Tree)
+                    foreach (var entry in treeComp.Tree)
                     {
-                        var aabb = _lookup.GetWorldAABB(light.Owner, xform);
+                        var aabb = _lookup.GetWorldAABB(entry.Uid, entry.Transform);
                         if (!aabb.Intersects(args.WorldAABB)) continue;
 
                         args.WorldHandle.DrawRect(aabb, Color.Green.WithAlpha(0.1f));

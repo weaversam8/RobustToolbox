@@ -89,7 +89,7 @@ Suspendisse hendrerit blandit urna ut laoreet. Suspendisse ac elit at erat males
             {
                 grid.AddChild(new Button
                 {
-                    MinSize = (50, 50),
+                    MinSize = new(50, 50),
                     Text = $"{x}, {y}"
                 });
             }
@@ -165,7 +165,7 @@ Suspendisse hendrerit blandit urna ut laoreet. Suspendisse ac elit at erat males
     {
         var textEdit = new TextEdit
         {
-            Placeholder = new Rope.Leaf("You deleted the lipsum OwO")
+            Placeholder = new Rope.Leaf("You deleted the lipsum\nOwO")
         };
         TabContainer.SetTabTitle(textEdit, "TextEdit");
 
@@ -204,7 +204,7 @@ Suspendisse hendrerit blandit urna ut laoreet. Suspendisse ac elit at erat males
     private Control TabRichText()
     {
         var label = new RichTextLabel();
-        label.SetMessage(FormattedMessage.FromMarkup(Lipsum));
+        label.SetMessage(FormattedMessage.FromMarkupOrThrow(Lipsum));
 
         TabContainer.SetTabTitle(label, "RichText");
         return label;
@@ -235,7 +235,7 @@ internal sealed class UITestCommand : LocalizedCommands
 
     public override void Execute(IConsoleShell shell, string argStr, string[] args)
     {
-        var window = new DefaultWindow { MinSize = (800, 600) };
+        var window = new DefaultWindow { MinSize = new(800, 600) };
         var control = new UITestControl();
         window.OnClose += control.OnClosed;
         window.Contents.AddChild(control);

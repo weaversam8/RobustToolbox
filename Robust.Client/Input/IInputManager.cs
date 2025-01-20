@@ -40,7 +40,7 @@ namespace Robust.Client.Input
         void KeyDown(KeyEventArgs e);
         void KeyUp(KeyEventArgs e);
 
-        IKeyBinding RegisterBinding(in KeyBindingRegistration reg, bool markModified=true);
+        IKeyBinding RegisterBinding(in KeyBindingRegistration reg, bool markModified=true, bool invalid=false);
 
         void RemoveBinding(IKeyBinding binding, bool markModified=true);
 
@@ -74,7 +74,7 @@ namespace Robust.Client.Input
         /// <summary>
         ///     UIKeyBindStateChanged is called when a keybind is found.
         /// </summary>
-        event Func<BoundKeyEventArgs, bool>? UIKeyBindStateChanged;
+        event Func<BoundKeyEventArgs, bool> UIKeyBindStateChanged;
 
         /// <summary>
         ///     If UIKeyBindStateChanged did not handle the BoundKeyEvent, KeyBindStateChanged is called.

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Reflection;
@@ -85,12 +86,14 @@ namespace Robust.Client.WebView.Cef
 
             _app = new RobustCefApp(_sawmill);
 
-            // We pass no main arguments...
-            CefRuntime.Initialize(new CefMainArgs(null), settings, _app, IntPtr.Zero);
+            var process = Process.GetCurrentProcess();
+            Environment.SetEnvironmentVariable("ROBUST_CEF_BROWSER_PROCESS_ID", process.Id.ToString());
+            Environment.SetEnvironmentVariable("ROBUST_CEF_BROWSER_PROCESS_MODULE", process.MainModule?.FileName ?? "");
 
-            // TODO CEF: After this point, debugging breaks. No, literally. My client crashes but ONLY with the debugger.
-            // I have tried using the DEBUG and RELEASE versions of libcef.so, stripped or non-stripped...
-            // And nothing seemed to work. Odd.
+            // So these arguments look like nonsense, but it turns out CEF is just *like that*.
+            // The first argument is literally nonsense, but it needs to be there as otherwise the second argument doesn't apply
+            // The second argument turns off CEF's bullshit error handling, which breaks dotnet's error handling.
+            CefRuntime.Initialize(new CefMainArgs(new string[]{"binary","--disable-in-process-stack-traces"}), settings, _app, IntPtr.Zero);
 
             if (_cfg.GetCVar(WCVars.WebResProtocol))
             {

@@ -21,6 +21,7 @@
 // SOFTWARE.
 
 using System;
+using System.Numerics;
 using NUnit.Framework;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
@@ -37,6 +38,30 @@ namespace Robust.UnitTesting.Shared.Physics;
 [TestFixture]
 public sealed class Collision_Test
 {
+    [Test]
+    public void TestHardCollidable()
+    {
+        var sim = RobustServerSimulation.NewSimulation().InitializeInstance();
+        var entManager = sim.Resolve<IEntityManager>();
+
+        var fixtures = entManager.System<FixtureSystem>();
+        var physics = entManager.System<SharedPhysicsSystem>();
+
+        var map = sim.CreateMap();
+
+        var bodyAUid = entManager.SpawnAttachedTo(null, new EntityCoordinates(map.Uid, Vector2.Zero));
+        var bodyBUid = entManager.SpawnAttachedTo(null, new EntityCoordinates(map.Uid, Vector2.Zero));
+        var bodyA = entManager.AddComponent<PhysicsComponent>(bodyAUid);
+        var bodyB = entManager.AddComponent<PhysicsComponent>(bodyBUid);
+
+        Assert.That(!physics.IsHardCollidable(bodyAUid, bodyBUid));
+
+        fixtures.CreateFixture(bodyAUid, "fix1", new Fixture(new PhysShapeCircle(0.5f), 1, 1, true));
+        fixtures.CreateFixture(bodyBUid, "fix1", new Fixture(new PhysShapeCircle(0.5f), 1, 1, true));
+
+        Assert.That(physics.IsHardCollidable(bodyAUid, bodyBUid));
+    }
+
     [Test]
     public void TestCollision()
     {
@@ -101,8 +126,8 @@ public sealed class Collision_Test
         var fixtures = entManager.System<FixtureSystem>();
         var physics = entManager.System<SharedPhysicsSystem>();
         var xformSystem = entManager.System<SharedTransformSystem>();
-        var mapId = mapManager.CreateMap();
-        var mapId2 = mapManager.CreateMap();
+        var mapId = sim.CreateMap().MapId;
+        var mapId2 = sim.CreateMap().MapId;
 
         var ent1 = entManager.SpawnEntity(null, new MapCoordinates(Vector2.Zero, mapId));
         var ent2 = entManager.SpawnEntity(null, new MapCoordinates(Vector2.Zero, mapId));
@@ -112,8 +137,8 @@ public sealed class Collision_Test
         var body2 = entManager.AddComponent<PhysicsComponent>(ent2);
         physics.SetBodyType(ent2, BodyType.Dynamic, body: body2);
 
-        fixtures.CreateFixture(ent1, new Fixture(new PhysShapeCircle(1f), 1, 0, true), body: body1);
-        fixtures.CreateFixture(ent2, new Fixture(new PhysShapeCircle(1f), 0, 1, true), body: body2);
+        fixtures.CreateFixture(ent1, "fix1", new Fixture(new PhysShapeCircle(1f), 1, 0, true), body: body1);
+        fixtures.CreateFixture(ent2, "fix1", new Fixture(new PhysShapeCircle(1f), 0, 1, true), body: body2);
 
         physics.WakeBody(ent1, body: body1);
         physics.WakeBody(ent2, body: body2);

@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using Robust.Shared.Utility;
+using Robust.Shared.ViewVariables;
 
 namespace Robust.Client.Graphics
 {
@@ -22,14 +24,14 @@ namespace Robust.Client.Graphics
             Constants = constants;
         }
 
-        public IReadOnlyDictionary<string, ShaderUniformDefinition> Uniforms { get; }
-        public IReadOnlyDictionary<string, ShaderVaryingDefinition> Varyings { get; }
-        public IReadOnlyDictionary<string, ShaderConstantDefinition> Constants { get; }
-        public IList<ShaderFunctionDefinition> Functions { get; }
-        public ShaderLightMode LightMode { get; }
-        public ShaderBlendMode BlendMode { get; }
-        public ShaderPreset Preset { get; }
-        public ICollection<ResPath> Includes { get; }
+        [ViewVariables] public IReadOnlyDictionary<string, ShaderUniformDefinition> Uniforms { get; }
+        [ViewVariables] public IReadOnlyDictionary<string, ShaderVaryingDefinition> Varyings { get; }
+        [ViewVariables] public IReadOnlyDictionary<string, ShaderConstantDefinition> Constants { get; }
+        [ViewVariables] public IList<ShaderFunctionDefinition> Functions { get; }
+        [ViewVariables] public ShaderLightMode LightMode { get; }
+        [ViewVariables] public ShaderBlendMode BlendMode { get; }
+        [ViewVariables] public ShaderPreset Preset { get; }
+        [ViewVariables] public ICollection<ResPath> Includes { get; }
 
     }
 
@@ -222,11 +224,12 @@ namespace Robust.Client.Graphics
             // TODO: add support for int, and vec3/4 arrays
             return
                 (type == ShaderDataType.Float) ||
-                (type == ShaderDataType.Vec2);
+                (type == ShaderDataType.Vec2) ||
+                (type == ShaderDataType.Bool);
         }
 
         [SuppressMessage("ReSharper", "StringLiteralTypo")]
-        private static readonly Dictionary<ShaderDataType, string> _nativeTypes = new()
+        private static readonly FrozenDictionary<ShaderDataType, string> _nativeTypes = new Dictionary<ShaderDataType, string>()
         {
             {ShaderDataType.Void, "void"},
             {ShaderDataType.Bool, "bool"},
@@ -251,7 +254,7 @@ namespace Robust.Client.Graphics
             {ShaderDataType.Sampler2D, "sampler2D"},
             {ShaderDataType.ISampler2D, "isampler2D"},
             {ShaderDataType.USampler2D, "usampler2D"},
-        };
+        }.ToFrozenDictionary();
     }
 
     internal enum ShaderLightMode : byte

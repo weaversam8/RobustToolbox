@@ -1,6 +1,9 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using Robust.Client.Graphics;
 using Robust.Shared.Audio.Midi;
+using Robust.Shared.Audio.Sources;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 
@@ -15,11 +18,10 @@ public enum MidiRendererStatus : byte
 
 public interface IMidiRenderer : IDisposable
 {
-
     /// <summary>
     ///     The buffered audio source of this renderer.
     /// </summary>
-    internal IClydeBufferedAudioSource Source { get; }
+    internal IBufferedAudioSource Source { get; }
 
     /// <summary>
     ///     Whether this renderer has been disposed or not.
@@ -30,11 +32,6 @@ public interface IMidiRenderer : IDisposable
     ///     This controls whether the midi file being played will loop or not.
     /// </summary>
     bool LoopMidi { get; set; }
-
-    /// <summary>
-    ///     This increases all note on velocities to 127.
-    /// </summary>
-    bool VolumeBoost { get; set; }
 
     /// <summary>
     ///     The midi program (instrument) the renderer is using.
@@ -95,6 +92,27 @@ public interface IMidiRenderer : IDisposable
     double SequencerTimeScale { get; }
 
     /// <summary>
+    ///     Whether this renderer will subscribe to another and copy its events.
+    ///     See <see cref="FilteredChannels"/> to filter specific channels.
+    /// </summary>
+    IMidiRenderer? Master { get; set; }
+
+    // NOTE: Why is the properties below BitArray, you ask?
+    // Well see, MIDI 2.0 supports up to 256(!) channels as opposed to MIDI 1.0's meekly 16 channels...
+    // I'd like us to support MIDI 2.0 one day so I'm just future-proofing here. Also BitArray is cool!
+
+    /// <summary>
+    ///     Allows you to filter out note events from certain channels.
+    ///     Only NoteOn will be filtered.
+    /// </summary>
+    BitArray FilteredChannels { get; }
+
+    /// <summary>
+    ///     Allows you to override all NoteOn velocities. Set to null to disable.
+    /// </summary>
+    byte? VelocityOverride { get; set; }
+
+    /// <summary>
     ///     Start listening for midi input.
     /// </summary>
     bool OpenInput();
@@ -119,6 +137,16 @@ public interface IMidiRenderer : IDisposable
     ///     Stops all notes being played currently.
     /// </summary>
     void StopAllNotes();
+
+    /// <summary>
+    ///     Reset renderer back to a clean state.
+    /// </summary>
+    void SystemReset();
+
+    /// <summary>
+    /// Clears all scheduled events.
+    /// </summary>
+    void ClearAllEvents();
 
     /// <summary>
     ///     Render and play MIDI to the audio source.
@@ -151,7 +179,7 @@ public interface IMidiRenderer : IDisposable
     ///     This is only used if <see cref="Mono"/> is set to True
     ///     and <see cref="TrackingEntity"/> is null.
     /// </summary>
-    EntityCoordinates? TrackingCoordinates { get; set; }
+    MapCoordinates? TrackingCoordinates { get; set; }
 
     MidiRendererState RendererState { get; }
 
@@ -159,7 +187,8 @@ public interface IMidiRenderer : IDisposable
     ///     Send a midi event for the renderer to play.
     /// </summary>
     /// <param name="midiEvent">The midi event to be played</param>
-    void SendMidiEvent(RobustMidiEvent midiEvent);
+    /// <param name="raiseEvent">Whether to raise an event for this event.</param>
+    void SendMidiEvent(RobustMidiEvent midiEvent, bool raiseEvent = true);
 
     /// <summary>
     ///     Schedule a MIDI event to be played at a later time.
@@ -172,7 +201,7 @@ public interface IMidiRenderer : IDisposable
     /// <summary>
     ///     Apply a certain state to the renderer.
     /// </summary>
-    void ApplyState(MidiRendererState state);
+    void ApplyState(MidiRendererState state, bool filterChannels = false);
 
     /// <summary>
     ///     Actually disposes of this renderer. Do NOT use outside the MIDI thread.

@@ -1,15 +1,14 @@
 using System.Linq;
+using System.Numerics;
 using System.Threading.Tasks;
 using NUnit.Framework;
-using Robust.Server.Player;
 using Robust.Shared;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
 using Robust.Shared.Network;
-using cIPlayerManager = Robust.Client.Player.IPlayerManager;
-using sIPlayerManager = Robust.Server.Player.IPlayerManager;
+using Robust.Shared.Player;
 
 namespace Robust.UnitTesting.Server.GameStates;
 
@@ -28,11 +27,14 @@ public sealed class PvsSystemTests : RobustIntegrationTest
 
         var mapMan = server.ResolveDependency<IMapManager>();
         var sEntMan = server.ResolveDependency<IEntityManager>();
-        var netMan = client.ResolveDependency<IClientNetManager>();
         var confMan = server.ResolveDependency<IConfigurationManager>();
-        var cPlayerMan = client.ResolveDependency<cIPlayerManager>();
-        var sPlayerMan = server.ResolveDependency<sIPlayerManager>();
+        var sPlayerMan = server.ResolveDependency<ISharedPlayerManager>();
         var xforms = sEntMan.System<SharedTransformSystem>();
+        var maps = sEntMan.System<SharedMapSystem>();
+
+        var cEntMan = client.ResolveDependency<IEntityManager>();
+        var netMan = client.ResolveDependency<IClientNetManager>();
+        var cPlayerMan = client.ResolveDependency<ISharedPlayerManager>();
 
         Assert.DoesNotThrow(() => client.SetConnectTarget(server));
         client.Post(() => netMan.ClientConnect(null!, 0, null!));
@@ -49,10 +51,9 @@ public sealed class PvsSystemTests : RobustIntegrationTest
         EntityUid map = default;
         await server.WaitPost(() =>
         {
-            var mapId = mapMan.CreateMap();
-            map = mapMan.GetMapEntityId(mapId);
-            var gridComp = mapMan.CreateGrid(mapId);
-            gridComp.SetTile(Vector2i.Zero, new Tile(1));
+            map = server.System<SharedMapSystem>().CreateMap(out var mapId);
+            var gridComp = mapMan.CreateGridEntity(mapId);
+            maps.SetTile(gridComp, Vector2i.Zero, new Tile(1));
             grid = gridComp.Owner;
         });
 
@@ -60,21 +61,21 @@ public sealed class PvsSystemTests : RobustIntegrationTest
         EntityUid player = default;
         EntityUid other = default;
         TransformComponent otherXform = default!;
-        var gridCoords = new EntityCoordinates(grid, (0.5f, 0.5f));
-        var mapCoords = new EntityCoordinates(map, (2, 2));
+        var gridCoords = new EntityCoordinates(grid, new Vector2(0.5f, 0.5f));
+        var mapCoords = new EntityCoordinates(map, new Vector2(2, 2));
         await server.WaitPost(() =>
         {
-            player = sEntMan.SpawnEntity("", gridCoords);
-            other = sEntMan.SpawnEntity("", gridCoords);
+            player = sEntMan.SpawnEntity(null, gridCoords);
+            other = sEntMan.SpawnEntity(null, gridCoords);
             otherXform = sEntMan.GetComponent<TransformComponent>(other);
 
             // Ensure map PVS chunk is not empty
-            sEntMan.SpawnEntity("", mapCoords);
+            sEntMan.SpawnEntity(null, mapCoords);
 
             // Attach player.
-            var session = (IPlayerSession) sPlayerMan.Sessions.First();
-            session.AttachToEntity(player);
-            session.JoinGame();
+            var session = sPlayerMan.Sessions.First();
+            server.PlayerMan.SetAttachedEntity(session, player);
+            sPlayerMan.JoinGame(session);
         });
 
         for (int i = 0; i < 10; i++)
@@ -86,8 +87,8 @@ public sealed class PvsSystemTests : RobustIntegrationTest
         // Check player got properly attached
         await client.WaitPost(() =>
         {
-            var ent = cPlayerMan.LocalPlayer?.ControlledEntity;
-            Assert.That(ent, Is.EqualTo(player));
+            var ent = cEntMan.GetNetEntity(cPlayerMan.LocalEntity);
+            Assert.That(ent, Is.EqualTo(sEntMan.GetNetEntity(player)));
         });
 
         // Move the player off-grid and back onto the grid in the same tick

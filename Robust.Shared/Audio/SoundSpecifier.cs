@@ -13,25 +13,22 @@ using System;
 namespace Robust.Shared.Audio;
 
 [ImplicitDataDefinitionForInheritors, Serializable, NetSerializable]
-public abstract class SoundSpecifier
+public abstract partial class SoundSpecifier
 {
     [DataField("params")]
-    public AudioParams Params { get; init; } = AudioParams.Default;
-
-    [Obsolete("Use SharedAudioSystem.GetSound(), or just pass sound specifier directly into SharedAudioSystem.")]
-    public abstract string GetSound(IRobustRandom? rand = null, IPrototypeManager? proto = null);
+    public AudioParams Params { get; set; } = AudioParams.Default;
 }
 
 [Serializable, NetSerializable]
-public sealed class SoundPathSpecifier : SoundSpecifier
+public sealed partial class SoundPathSpecifier : SoundSpecifier
 {
     public const string Node = "path";
 
     [DataField(Node, customTypeSerializer: typeof(ResPathSerializer), required: true)]
-    public ResPath Path { get; }
+    public ResPath Path { get; private set; }
 
     [UsedImplicitly]
-    public SoundPathSpecifier()
+    private SoundPathSpecifier()
     {
     }
 
@@ -45,21 +42,15 @@ public sealed class SoundPathSpecifier : SoundSpecifier
         if (@params.HasValue)
             Params = @params.Value;
     }
-
-    [Obsolete("Use SharedAudioSystem.GetSound(), or just pass sound specifier directly into SharedAudioSystem.")]
-    public override string GetSound(IRobustRandom? rand = null, IPrototypeManager? proto = null)
-    {
-        return Path == null ? string.Empty : Path.ToString();
-    }
 }
 
 [Serializable, NetSerializable]
-public sealed class SoundCollectionSpecifier : SoundSpecifier
+public sealed partial class SoundCollectionSpecifier : SoundSpecifier
 {
     public const string Node = "collection";
 
     [DataField(Node, customTypeSerializer: typeof(PrototypeIdSerializer<SoundCollectionPrototype>), required: true)]
-    public string? Collection { get; }
+    public string? Collection { get; private set; }
 
     [UsedImplicitly]
     public SoundCollectionSpecifier() { }
@@ -69,16 +60,5 @@ public sealed class SoundCollectionSpecifier : SoundSpecifier
         Collection = collection;
         if (@params.HasValue)
             Params = @params.Value;
-    }
-
-    [Obsolete("Use SharedAudioSystem.GetSound(), or just pass sound specifier directly into SharedAudioSystem.")]
-    public override string GetSound(IRobustRandom? rand = null, IPrototypeManager? proto = null)
-    {
-        if (Collection == null)
-            return string.Empty;
-
-        IoCManager.Resolve(ref rand, ref proto);
-        var soundCollection = proto.Index<SoundCollectionPrototype>(Collection);
-        return rand.Pick(soundCollection.PickFiles).ToString();
     }
 }
