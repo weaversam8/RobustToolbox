@@ -39,7 +39,7 @@ END TEMPLATE-->
 
 ### New features
 
-* The client localisation manager now supports hot-reloading ftl files. 
+*None yet*
 
 ### Bugfixes
 
@@ -52,6 +52,82 @@ END TEMPLATE-->
 ### Internal
 
 *None yet*
+
+
+## 257.0.0
+
+### Breaking changes
+
+* The client will now automatically pause any entities that leave their PVS range.
+* Contacts for terminating entities no longer raise wake events.
+
+### New features
+
+* Added `IPrototypeManager.IsIgnored()` for checking whether a given prototype kind has been marked as ignored via `RegisterIgnore()`.
+* Added `PoolManager` & `TestPair` classes to `Robust.UnitTesting`. These classes make it easier to create & use pooled server/client instance pairs in integration tests.
+* Catch NotYamlSerializable DataFields with an analyzer.
+* Optimized RSI preloading and texture atlas creation.
+
+### Bugfixes
+
+* Fix clients unintentionally un-pausing paused entities that re-enter pvs range
+
+### Other
+
+* The yaml prototype id serialiser now provides better feedback when trying to validate an id for a prototype kind that has been ignored via `IPrototypeManager.RegisterIgnore()`
+* Several SpriteComponent methods have been marked as obsolete, and should be replaced with new methods in SpriteSystem.
+* Rotation events no longer check for grid traversal.
+
+
+## 256.0.0
+
+### Breaking changes
+
+* `ITypeReaderWriter<TType, TNode>` has been removed due to being unused. Implement `ITypeSerializer<TType, TNode>` instead
+* Moved AsNullable extension methods to the Entity struct.
+
+### New features
+
+* Add DevWindow tab to show all loaded textures.
+* Add Vector2i / bitmask converfsion helpers.
+* Allow texture preload to be skipped for some textures.
+* Check audio file signatures instead of extensions.
+* Add CancellationTokenRegistration to sandbox.
+* Add the ability to serialize TimeSpan from text.
+* Add support for rotated / mirrored tiles.
+
+### Bugfixes
+
+* Fix yaml hot reloading.
+* Fix a linear dictionary lookup in PlacementManager.
+
+### Other
+
+* Make ItemList not run deselection callback on all items if they aren't selected.
+* Cleanup warnings for CS0649 & CS0414.
+
+### Internal
+
+* Move PointLight component states to shared.
+
+
+## 255.1.0
+
+### New features
+
+* The client localisation manager now supports hot-reloading ftl files.
+* TransformSystem can now raise `GridUidChangedEvent` and `MapUidChangedEvent` when a entity's grid or map changes. This event is only raised if the `ExtraTransformEvents` metadata flag is enabled.
+
+### Bugfixes
+
+* Fixed a server crash due to a `NullReferenceException` in PVS system when a player's local entity is also one of their view subscriptions.
+* Fix CompileRobustXamlTask for benchmarks.
+* .ftl files will now hot reload.
+* Fix placementmanager sometimes not clearing.
+
+### Other
+
+* Container events are now documented.
 
 
 ## 255.0.0

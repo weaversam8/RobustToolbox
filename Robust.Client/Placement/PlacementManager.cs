@@ -174,6 +174,18 @@ namespace Robust.Client.Placement
 
         private Direction _direction = Direction.South;
 
+        private bool _mirrored;
+
+        public bool Mirrored
+        {
+            get => _mirrored;
+            set
+            {
+                _mirrored = value;
+                MirroredChanged?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
         /// <inheritdoc />
         public Direction Direction
         {
@@ -187,6 +199,9 @@ namespace Robust.Client.Placement
 
         /// <inheritdoc />
         public event EventHandler? DirectionChanged;
+
+        /// <inheritdoc />
+        public event EventHandler? MirroredChanged;
 
         private PlacementOverlay _drawOverlay = default!;
         private bool _isActive;
@@ -487,16 +502,15 @@ namespace Robust.Client.Placement
         {
             ClearWithoutDeactivation();
 
-            CurrentPermission = info;
-
-            if (!_modeDictionary.TryFirstOrNull(pair => pair.Key.Equals(CurrentPermission.PlacementOption), out KeyValuePair<string, Type>? placeMode))
+            if (info.PlacementOption is not { } option || !_modeDictionary.TryGetValue(option, out var placeMode))
             {
-                _sawmill.Log(LogLevel.Warning, $"Invalid placement mode `{CurrentPermission.PlacementOption}`");
+                _sawmill.Log(LogLevel.Warning, $"Invalid placement mode `{info.PlacementOption}`");
                 Clear();
                 return;
             }
 
-            CurrentMode = (PlacementMode) Activator.CreateInstance(placeMode.Value.Value, this)!;
+            CurrentPermission = info;
+            CurrentMode = (PlacementMode) Activator.CreateInstance(placeMode, this)!;
 
             if (hijack != null)
             {
@@ -777,7 +791,9 @@ namespace Robust.Client.Placement
                     var grid = EntityManager.GetComponent<MapGridComponent>(gridId);
 
                     // no point changing the tile to the same thing.
-                    if (Maps.GetTileRef(gridId, grid, coordinates).Tile.TypeId == CurrentPermission.TileType)
+                    var tileRef = Maps.GetTileRef(gridId, grid, coordinates).Tile;
+                    if (tileRef.TypeId == CurrentPermission.TileType &&
+                        tileRef.RotationMirroring == Tile.DirectionToByte(Direction) + (Mirrored ? 4 : 0))
                         return;
                 }
 
@@ -801,9 +817,14 @@ namespace Robust.Client.Placement
             };
 
             if (CurrentPermission.IsTile)
+            {
                 message.TileType = CurrentPermission.TileType;
+                message.Mirrored = Mirrored;
+            }
             else
+            {
                 message.EntityTemplateName = CurrentPermission.EntityType;
+            }
 
             // world x and y
             message.NetCoordinates = EntityManager.GetNetCoordinates(coordinates);
